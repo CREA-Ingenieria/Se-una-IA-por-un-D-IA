@@ -1,0 +1,27 @@
+{
+  "name": "se-una-ia",
+  "version": "0.1.0-alpha",
+  "description": "Sé una IA por un d-IA — servidor central de la experiencia CREA (chat rooms pedagógicos)",
+  "main": "server.js",
+  "author": "Equipo CREA, Facultad de Ingeniería, Universidad de los Andes",
+  "contributors": [
+    "David Octavio Ibarra",
+    "Sebastián Suárez",
+    "Francisco Santamaría",
+    "Ángel Peñaranda"
+  ],
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "multicast-dns": "7.2.5",
+    "qrcode-generator": "1.4.4",
+    "socket.io": "4.7.5",
+    "socket.io-client": "4.7.5"
+  }
+}

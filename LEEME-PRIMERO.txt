@@ -1,0 +1,54 @@
+SE UNA IA POR UN D-IA - version alpha
+CREA - Facultad de Ingenieria, Universidad de los Andes
+Creado por David Octavio Ibarra, Sebastian Suarez, Francisco Santamaria,
+Angel Penaranda y el equipo CREA.
+==============================================================
+
+INSTALAR (una sola vez, en el PC que hara de servidor)
+  1. Descomprime este zip en una carpeta fija, por ejemplo Documentos.
+     No lo ejecutes desde dentro del zip.
+  2. Doble clic en INSTALAR.bat
+     - No necesita internet: Node.js y todo lo necesario ya vienen aqui.
+     - Te pide la clave del panel admin, el nombre corto para los iPads
+       (seunaia -> seunaia.local) y el nombre/clave de la red WiFi propia
+       (hotspot). Enter = valores por defecto.
+     - Pide permiso de administrador UNA vez para abrir el firewall.
+     - Crea el acceso directo "Se una IA - servidor" en el escritorio.
+
+USAR (cada vez que haya actividad)
+  1. Doble clic en INICIAR.bat (o en el acceso directo del escritorio).
+  2. Escoge como se conectan los iPads:
+       1 = la red donde ya esta este PC (WiFi o cable de la sala)
+       2 = una red WiFi propia creada por este PC (hotspot)
+  3. Se abre el panel admin en este PC. Ahi esta el boton
+     "Pantalla de conexion (QR)": proyectala en la sala.
+  4. En cada iPad:
+       - (solo opcion 2) escanea el QR de la WiFi con la camara para unirse
+       - escanea el QR del juego (es lo que siempre funciona), o escribe en
+         Safari la direccion numerica que aparece debajo del QR.
+  5. Si un iPad se apaga o hay que cambiarlo: en otro iPad, la persona escribe
+     su MISMO nickname y toca "Volver a mi puesto". Si dice que sigue
+     conectado, en el panel admin toca "Liberar" en ese PC.
+  6. NO cierres la ventana negra mientras dure la actividad. Al terminar,
+     presiona Ctrl+C y te pregunta si apagar el hotspot.
+
+SI LOS IPADS NO CARGAN
+  - Usa el QR: lleva la direccion numerica (ej. 192.168.137.1), que funciona
+    aunque la red no deje usar el nombre seunaia.local.
+  - Con la opcion 1: algunas WiFi de la universidad aislan los equipos entre
+    si. Usa la opcion 2 (hotspot).
+  - Con la opcion 2: el PC necesita una tarjeta WiFi y alguna conexion activa
+    (cable o WiFi) para que Windows deje encender el hotspot. Si no se puede
+    encender solo, se abre la configuracion de Windows para activarlo a mano.
+  - El hotspot de Windows acepta hasta 8 dispositivos. Para mas iPads usa un
+    router propio en la sala.
+  - Mas detalles en README.md (seccion "Si los iPads no cargan la pagina").
+
+CAMBIAR CLAVES O EL NOMBRE
+  Abre config.json con el Bloc de notas, cambia los valores y reinicia el servidor.
+
+ENSAYAR SIN GENTE
+  Con el servidor abierto, en otra ventana de comandos dentro de esta carpeta:
+    runtime\node.exe tools\bots.js 7 http://localhost
+
+Recursos incluidos y enlaces de descarga: RECURSOS.md
