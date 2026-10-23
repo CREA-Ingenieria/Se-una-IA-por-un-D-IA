@@ -28,6 +28,7 @@ img{max-width:100%}
 @keyframes forget{0%{opacity:0;transform:translate(-50%,-6px)}15%{opacity:1;transform:translate(-50%,0)}85%{opacity:1}100%{opacity:0}}
 @keyframes pop{0%{transform:scale(.92);opacity:0}100%{transform:none;opacity:1}}
 .anim{animation:reveal .85s cubic-bezier(.22,1,.36,1) both}
+#app.settled .anim{animation:none}
 
 #app{position:relative;z-index:1;min-height:100%;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 24px}
 .topbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:18px}
@@ -204,6 +205,9 @@ table.devs{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
 .pcgrid.live{grid-template-columns:minmax(0,1fr)}
 .pcgrid.live .side{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
 .chat.live{height:max(560px,calc(100dvh - 190px));border-color:var(--y);box-shadow:0 0 0 1px var(--y),0 0 32px rgba(235,226,18,.2)}
+/* iPad con el teclado abierto: el chat ocupa solo lo visible y el último mensaje queda sobre el teclado */
+html.kb .chat,html.kb .livechat{height:calc(var(--vvh,100dvh) - 16px)}
+.ustat .cd,.livechat .cd{color:inherit;font-weight:700}
 .chat.live .bubble,.livechat .bubble{font-size:17px;max-width:min(85%,760px)}
 
 /* Interruptor del Revisor y botón de foto */

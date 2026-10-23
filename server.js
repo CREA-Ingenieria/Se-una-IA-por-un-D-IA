@@ -33,10 +33,10 @@ const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santam
 const ROLES = ["modelo", "arnes", "revisor"];
 const CORE = ["modelo", "arnes"];
 // Canales: U Usuario (profesor)↔Modelo: el único que habla con el Usuario es el Modelo
-//          C Modelo→Arnés · R Revisor→Modelo (retroalimentación) · H Revisor→Arnés (actualiza sus acciones)
-// El Modelo no le escribe al Revisor y el Arnés solo recibe (del Modelo y del Revisor).
-const READ = { modelo: ["U", "C", "R"], arnes: ["C", "H"], revisor: ["C", "R", "H"] };
-const SEND_TO = { modelo: { arnes: "C", usuario: "U" }, revisor: { modelo: "R", arnes: "H" }, arnes: {} };
+//          C Modelo→Arnés · R Revisor→Modelo (retroalimentación; el Arnés también la lee)
+// El Modelo no le escribe al Revisor ni el Revisor al Arnés: al Revisor no le llega nada del Modelo.
+const READ = { modelo: ["U", "C", "R"], arnes: ["C", "R"], revisor: ["R"] };
+const SEND_TO = { modelo: { arnes: "C", usuario: "U" }, revisor: { modelo: "R" }, arnes: {} };
 const MAX_TEAMS = 8;
 const MAX_MSG = 280;
 const BONUS = 40;

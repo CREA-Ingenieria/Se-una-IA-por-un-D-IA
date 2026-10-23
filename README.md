@@ -111,15 +111,14 @@ La frase de cada rol: **Modelo: Piensa** · **Arnés: Ejecuta lo que diga el Mod
 | Canal | Quién escribe → quién lee |
 |---|---|
 | U | Usuario (profesor) ↔ Modelo. **El Modelo es el único que habla con el Usuario.** El Arnés y el Revisor no lo ven |
-| C | Modelo → Arnés (el Revisor también lo lee) |
-| R | Revisor → Modelo: retroalimentación, con texto o **fotos** |
-| H | Revisor → Arnés: actualiza las acciones del Arnés, con texto o fotos |
+| C | Modelo → Arnés. El Revisor no lo ve |
+| R | Revisor → Modelo: describe lo que hace el Arnés, con texto o **fotos**. El Arnés también lo lee |
 
-El Modelo no le escribe al Revisor, y el Arnés solo recibe (del Modelo y del Revisor). Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se puede plegar:
+El Modelo no le escribe al Revisor y al Revisor no le llega ningún mensaje del Modelo. El Revisor no le escribe al Arnés. El Arnés solo recibe: las órdenes del Modelo y lo que el Revisor le reporta al Modelo. Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se puede plegar:
 
 - **Modelo**: piensa el plan, habla con el Usuario (a través de la cola), da órdenes al Arnés y recibe la retroalimentación del Revisor. Con el interruptor **Arnés / Usuario** escoge a quién le escribe.
 - **Arnés (ejecutor)**: hace con los materiales lo que diga el Modelo; no escribe.
-- **Revisor**: describe lo que hace el Arnés; retroalimenta al Modelo y actualiza al Arnés. Con el interruptor **Modelo / Arnés** escoge a quién le escribe.
+- **Revisor**: mira lo que hace el Arnés y se lo describe al Modelo (texto o fotos). Solo le escribe al Modelo y solo ve sus propios reportes.
 - **Todos**: prohibido usar internet, el celular o buscar información; el agente solo sabe lo que está en el chat.
 
 ### Cola y enfriamiento para hablar con el Usuario
@@ -131,6 +130,8 @@ Varios equipos juegan a la vez y el Usuario atiende a **un Modelo a la vez**:
 - El admin la cierra con **Terminar y atender al siguiente**. Si se le olvida, la conversación **se cierra sola tras 1 min sin mensajes** (ajustable), para que la cola no se quede detenida; cada mensaje de cualquiera de los dos reinicia ese minuto. Desde ahí, ese Modelo queda en **enfriamiento** (1 min por defecto) antes de poder volver a hacer fila.
 - La espera de la cola, el enfriamiento y el cierre automático se ajustan en el panel admin (antes de empezar y en plena actividad).
 - El Usuario puede escribirle a cualquier Modelo cuando quiera (prompt o *Ver los canales*); eso no pasa por la cola.
+
+**Teclado del iPad**: al tocar el campo para escribir, el chat se ajusta al espacio que queda sobre el teclado y baja hasta el último mensaje, para que el teclado no tape la conversación.
 
 **Fotos del Revisor**: el botón de cámara abre la cámara del iPad. La foto se reduce en el iPad (máximo 1280 px) antes de enviarse y ocupa 120 caracteres de contexto. Cuando se olvida, se borra también del servidor.
 

@@ -10,11 +10,11 @@ const RTX = { modelo: "#fff", arnes: "#000", revisor: "#fff", profesor: "#000" }
 const ARTICLE = { modelo: "EL MODELO", arnes: "EL ARNÉS", revisor: "EL REVISOR" };
 // La frase que define cada rol
 const PHRASE = { modelo: "Piensa", arnes: "Ejecuta lo que diga el Modelo", revisor: "Describe las acciones del Arnés" };
-const CHN = { U: "Usuario ↔ Modelo", C: "Modelo → Arnés", R: "Revisor → Modelo", H: "Revisor → Arnés" };
+const CHN = { U: "Usuario ↔ Modelo", C: "Modelo → Arnés", R: "Revisor → Modelo" };
 // a quién puede escribir cada rol: destino → [canal, nombre, ayuda del campo]
 const DEST = {
   modelo: { arnes: ["C", "Arnés", "Órdenes para el Arnés…"], usuario: ["U", "Usuario", "Escríbele al Usuario…"] },
-  revisor: { modelo: ["R", "Modelo", "Retroalimentación para el Modelo…"], arnes: ["H", "Arnés", "Actualiza lo que hace el Arnés…"] },
+  revisor: { modelo: ["R", "Modelo", "Describe al Modelo lo que hace el Arnés…"] },
 };
 // componentes que llenan el contexto, en el orden de la barra
 const PARTS = ["profesor", "modelo", "revisor"];
@@ -29,14 +29,14 @@ const RULES = {
   ],
   arnes: [
     "Eres el ejecutor: haces con los materiales lo que diga el Modelo.",
-    "Recibes las órdenes del Modelo y las actualizaciones del Revisor.",
+    "Recibes las órdenes del Modelo y ves la retroalimentación que el Revisor le manda al Modelo.",
     "No escribes ni hablas con el Usuario.",
   ],
   revisor: [
     "Describes las acciones del Arnés: qué hace y cómo va.",
-    "Retroalimentas al Modelo con reportes y fotos del avance.",
-    "Actualizas las acciones del Arnés cuando hay que corregir algo.",
-    "No hablas con el Usuario ni tocas los materiales.",
+    "Solo le escribes al Modelo: reportes y fotos del avance. El Arnés también lo lee.",
+    "No le escribes al Arnés ni al Usuario, y no ves lo que escribe el Modelo.",
+    "No tocas los materiales.",
   ],
 };
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
@@ -45,8 +45,8 @@ const RULE_ALL ="Prohibido usar internet, el celular o buscar información: el a
 const camIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="14" r="3.5"/></svg>`;
 const HINT = {
   modelo: "Piensa. Recibes el encargo del Usuario y la retroalimentación del Revisor, y lo conviertes en órdenes claras para el Arnés. Para hablar con el Usuario haces fila.",
-  arnes: "Ejecuta lo que diga el Modelo. Lees sus órdenes y las actualizaciones del Revisor, y construyes con las manos. No escribes.",
-  revisor: "Describe las acciones del Arnés. Miras lo que construye, retroalimentas al Modelo y actualizas al Arnés cuando algo hay que corregir.",
+  arnes: "Ejecuta lo que diga el Modelo. Lees sus órdenes y lo que el Revisor le reporta al Modelo, y construyes con las manos. No escribes.",
+  revisor: "Describe las acciones del Arnés. Miras lo que construye y se lo cuentas al Modelo, con texto o fotos. No ves lo que escribe el Modelo.",
 };
 
 const IS_ADMIN = location.pathname.replace(/\/+$/, "") === "/admin";
@@ -188,16 +188,22 @@ function curTo(v) {
   const keys = Object.keys(DEST[v.you.role] || {});
   return keys.includes(L.to) ? L.to : keys[0];
 }
+// cuenta regresiva: el número lo actualiza tickCountdowns() sin redibujar la pantalla,
+// así el campo de texto no se reemplaza cada segundo y el teclado del iPad no se cierra
+const cd = (at) => `<b class="cd" data-until="${at}"></b>`;
+function tickCountdowns() {
+  document.querySelectorAll("#app [data-until]").forEach((el) => { const t = mmss(secsTo(+el.dataset.until)); if (el.textContent !== t) el.textContent = t; });
+}
 // estado del Modelo frente al Usuario: conversación abierta, en cola, enfriamiento o libre
 function usuarioStatus(u) {
-  if (u.live) return `<div class="ustat live"><b class="t">EN CONVERSACIÓN CON EL USUARIO</b>Los mensajes llegan al instante. Se cierra sola en ${mmss(secsTo(u.liveEndsAt))} si nadie escribe.</div>`;
+  if (u.live) return `<div class="ustat live"><b class="t">EN CONVERSACIÓN CON EL USUARIO</b>Los mensajes llegan al instante. Se cierra sola en ${cd(u.liveEndsAt)} si nadie escribe.</div>`;
   if (u.queue) {
     const s = secsTo(u.queue.readyAt), n = u.queue.ahead;
-    const parts = [s > 0 ? `espera mínima ${mmss(s)}` : "", n ? `${n} ${n === 1 ? "equipo" : "equipos"} antes que tú` : ""].filter(Boolean);
+    const parts = [s > 0 ? `espera mínima ${cd(u.queue.readyAt)}` : "", n ? `${n} ${n === 1 ? "equipo" : "equipos"} antes que tú` : ""].filter(Boolean);
     return `<div class="ustat queue"><b class="t">EN LA COLA DEL USUARIO · PUESTO ${u.queue.pos}</b>${parts.join(" · ") || "Ya casi te atiende."}</div>`;
   }
   const cool = secsTo(u.coolUntil);
-  if (cool > 0) return `<div class="ustat cool">Podrás volver a escribirle al Usuario en <b>${mmss(cool)}</b></div>`;
+  if (cool > 0) return `<div class="ustat cool">Podrás volver a escribirle al Usuario en ${cd(u.coolUntil)}</div>`;
   return `<div class="ustat">Para hablar con el Usuario entras a la cola: espera mínima ${mmss(u.queueSec)}${u.waiting ? ` · ${u.waiting} en la cola` : ""}</div>`;
 }
 
@@ -210,7 +216,7 @@ function vChat(v) {
     const old = m.id === c.oldestId && pct > 85;
     html += `<div data-id="${m.id}" class="msg${m.mine ? " me" : ""}${old ? " old" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}${bubble(m)}</div>`;
   });
-  if (!v.msgs.length) html = `<div class="empty">${r === "modelo" ? '<div class="spin" style="width:40px;height:40px"></div>Esperando el encargo del Usuario…' : "Aún no te llega nada. Espera tu mensaje o juega al lado."}</div>`;
+  if (!v.msgs.length) html = `<div class="empty">${r === "modelo" ? '<div class="spin" style="width:40px;height:40px"></div>Esperando el encargo del Usuario…' : r === "revisor" ? "Mira lo que hace el Arnés y descríbeselo al Modelo." : "Aún no te llega nada. Espera tu mensaje o juega al lado."}</div>`;
   // mensaje del Modelo esperando en la cola del Usuario (todavía no ocupa contexto)
   if (u && u.queue) html += `<div class="msg me pending">${bean(r)}<div class="bubble"><span class="n" style="color:${RHEX.profesor}">EN COLA PARA EL USUARIO</span>${esc(u.queue.text)}</div></div>`;
   const dis = v.paused || L.sending ? " disabled" : "";
@@ -221,7 +227,8 @@ function vChat(v) {
     const blocked = r === "modelo" && to === "usuario" && !live && (u.queue || secsTo(u.coolUntil) > 0);
     const off = dis || (blocked ? " disabled" : "");
     const hold = blocked ? (u.queue ? "Ya estás en la cola del Usuario…" : "Espera para volver a escribirle al Usuario…") : place;
-    compose = `${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">Escribirle a:</span>
+    const many = Object.keys(dests).length > 1;
+    compose = `${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
         ${Object.entries(dests).map(([k, d]) => `<button type="button" class="seg${to === k ? " on" : ""}" aria-pressed="${to === k}" data-act="to" data-to="${k}">${d[1]}</button>`).join("")}</div>
       <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${hold}" aria-label="Mensaje para ${name}"${off}>
         ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto a ${name}" title="Mandar foto">${camIcon}</label>
@@ -229,11 +236,12 @@ function vChat(v) {
         <button class="btn" style="background:${to === "usuario" ? RC.profesor : RC[r]};color:${to === "usuario" ? "#000" : RTX[r]}"${off}>${to === "usuario" && !live ? "HACER FILA" : "ENVIAR"}</button></form>`;
   } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>`;
   const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}: ${esc(PHRASE[r])}.</b> ${HINT[r]}</p></div>` : "";
-  return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">PC ${v.you.pc}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}${hint}
+  // la pista y el aviso de olvido van en contenedores fijos, para que el resto de la pantalla no se mueva al actualizarla
+  return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">PC ${v.you.pc}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}<div class="slot-hint">${hint}</div>
     <div class="pchead"><span class="phrase sm" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</span>
       <div class="hud"><span><b>${c.used}</b> / ${c.limit} CARACTERES${c.bonus ? ` <span class="muted">(base ${c.base})</span>` : ""}</span>${ctxBar(c.by || {}, c.limit, forgot ? "flash" : "")}${ctxLegend(c.by || {})}${c.bonus ? `<span class="bonus">${esc(c.bonusLog)} · total +${c.bonus}</span>` : ""}</div></div>
     <div class="pcgrid${live ? " live" : ""}"><section class="card chat${live ? " live" : ""}" aria-label="Chat">
-      ${forgot ? `<div class="forgot">Se olvidaron ${c.forgot.n} caracteres</div>` : ""}
+      <div class="slot-forgot">${forgot ? `<div class="forgot">Se olvidaron ${c.forgot.n} caracteres</div>` : ""}</div>
       <div class="msgs" id="msgs">${html}</div>${compose}
       ${v.paused ? `<div class="overlay"><span class="dots" style="font-size:44px">PAUSA</span><span class="muted">El admin pausó la actividad</span></div>` : ""}
     </section><div class="side"><div class="card rules">${rulesList(r, true)}</div>${v.question ? vMini(v) : ""}</div></div>`;
@@ -401,7 +409,7 @@ function vUsuario(v) {
   const t = v.live.team;
   return `<div class="usr"><section class="card livechat" aria-label="Conversación con el Modelo del equipo ${t + 1}">
       <div class="admhead"><div><h2 class="h1" style="font-size:24px;color:var(--y)">CONVERSANDO CON EL MODELO · EQUIPO ${t + 1}</h2>
-        <span class="muted" style="font-size:12.5px">Se cierra sola en <b style="color:var(--fg)">${mmss(secsTo(v.live.endsAt))}</b> si nadie escribe</span></div>
+        <span class="muted" style="font-size:12.5px">Se cierra sola en ${cd(v.live.endsAt)} si nadie escribe</span></div>
         <button class="btn" style="background:var(--m);color:#fff" data-act="endLive">Terminar${v.queue.length ? " y atender al siguiente" : ""}</button></div>
       <div class="msgs" id="msgs">${chat(t)}</div>
       <form class="compose" data-submit="reply" data-t="${t}"><input class="input" id="reply" maxlength="280" autocomplete="off" placeholder="Respóndele al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn" style="background:var(--y)">ENVIAR</button></form>
@@ -410,11 +418,25 @@ function vUsuario(v) {
 function vTeamModal(v, t) {
   const tm = v.teams[t];
   return `<div class="modal" data-act="closeTeam"><div class="card" data-stop="1" role="dialog" aria-label="Canales del equipo ${t + 1}"><div class="admhead"><h2 class="h1" style="font-size:28px">EQUIPO ${t + 1}</h2><button class="btn dark" data-act="closeTeam">Cerrar</button></div>
-    <div class="chgrid">${["U", "C", "R", "H"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(m.img)}" alt="Foto del Revisor"></a>` : ""}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
+    <div class="chgrid">${["U", "C", "R"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(m.img)}" alt="Foto del Revisor"></a>` : ""}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
       ${c === "U" && !(v.live && v.live.team === t) ? `<form class="replyf" data-submit="reply" data-t="${t}"><input class="input" id="replyTeam" maxlength="280" autocomplete="off" placeholder="Escribirle al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn sm" style="background:var(--y)">Enviar</button></form>` : ""}</div>`).join("")}</div></div></div>`;
 }
 
 // ---------- Render ----------
+// Actualiza la pantalla cambiando solo lo que cambió. Así el campo donde se escribe no se reemplaza
+// cuando llega un mensaje y el teclado del iPad no se cierra en plena conversación.
+function morph(a, b) {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b); return; }
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  morphChildren(a, b);
+}
+function morphChildren(a, b) {
+  const ac = [...a.childNodes], bc = [...b.childNodes];
+  bc.forEach((n, i) => (i < ac.length ? morph(ac[i], n) : a.appendChild(n)));
+  ac.slice(bc.length).forEach((n) => n.remove());
+}
 function render() {
   // con un menú desplegable abierto no se redibuja (se cerraría); el intervalo lo intenta de nuevo
   if (document.activeElement && document.activeElement.tagName === "SELECT") return;
@@ -435,17 +457,20 @@ function render() {
   if (!onLanding) html += credits();
 
   if (html !== L.lastHtml) {
-    $("#app").innerHTML = html;
+    const next = document.createElement("div");
+    next.innerHTML = html;
+    morphChildren($("#app"), next);
     L.lastHtml = html;
     Object.entries(keep).forEach(([id, val]) => { const el = document.getElementById(id); if (el && (id !== "cfgLimit" || id === fid)) el.value = val; });
     if (bcT && $("#bcTarget")) $("#bcTarget").value = bcT;
     if (details && $("#devs")) $("#devs").open = true;
     if (fid) { const el = document.getElementById(fid); if (el) { el.focus(); try { if (ss != null) el.setSelectionRange(ss, ss); } catch (_) {} } }
     const m2 = $("#msgs"); if (m2) m2.scrollTop = stick ? m2.scrollHeight : prevTop;
-    if (!L.firstPaint) document.querySelectorAll("#app .anim").forEach((el) => (el.style.animation = "none"));
+    $("#app").classList.toggle("settled", !L.firstPaint); // las animaciones de entrada solo en la primera pintada
     L.firstPaint = false;
     document.querySelectorAll("#app .msg[data-id]").forEach((el) => L.seen.add(+el.dataset.id));
   }
+  tickCountdowns();
   const tEl = $("#toast");
   if (L.toast && Date.now() < L.toast.until) { if (tEl.dataset.t !== L.toast.text) { tEl.innerHTML = `<div class="toast" role="status">${esc(L.toast.text)}</div>`; tEl.dataset.t = L.toast.text; } }
   else if (tEl.innerHTML) { tEl.innerHTML = ""; tEl.dataset.t = ""; }
@@ -584,6 +609,23 @@ document.addEventListener("submit", async (e) => {
   }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && L.adminTeam !== null) { L.adminTeam = null; render(); } });
+
+// iPad: al abrir el teclado, el chat se encoge al espacio que queda visible y baja hasta el último
+// mensaje, para que el teclado no tape la conversación (Safari no achica la página por sí solo)
+const vv = window.visualViewport;
+function fitKeyboard() {
+  if (!vv) return;
+  const a = document.activeElement, chat = a && a.matches("input.input") && a.closest(".chat, .livechat");
+  const open = !!chat && window.innerHeight - vv.height > 120;
+  document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+  document.documentElement.classList.toggle("kb", open);
+  if (!open) return;
+  window.scrollTo(0, chat.getBoundingClientRect().top + window.scrollY - 8);
+  const m = $("#msgs"); if (m) m.scrollTop = m.scrollHeight;
+}
+if (vv) vv.addEventListener("resize", fitKeyboard);
+document.addEventListener("focusin", () => setTimeout(fitKeyboard, 350));
+document.addEventListener("focusout", () => setTimeout(fitKeyboard, 350));
 
 // mantener la pantalla del iPad encendida cuando el navegador lo permite
 let wake = null;
