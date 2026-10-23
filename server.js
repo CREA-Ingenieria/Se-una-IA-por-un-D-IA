@@ -24,6 +24,8 @@ const PUBLIC = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const SNAPSHOT = path.join(DATA_DIR, "sesion.json");
 const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const SNAPSHOT_VERSION = 3; // los respaldos de versiones anteriores no se cargan
+const FILES_DIR = path.join(DATA_DIR, "archivos"); // fotos, videos, audios… que manda el Revisor
 
 // Autoría (se muestra en la landing, al pie de cada pantalla y en la consola)
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
@@ -39,9 +41,10 @@ const READ = { modelo: ["U", "C", "R"], arnes: ["C", "R"], revisor: ["R"] };
 const SEND_TO = { modelo: { arnes: "C", usuario: "U" }, revisor: { modelo: "R" }, arnes: {} };
 const MAX_TEAMS = 8;
 const MAX_MSG = 280;
-const BONUS = 40;
-const IMG_COST = 120; // una foto ocupa lo mismo que 120 caracteres de contexto
-const MAX_IMG = 1500000; // ~1,1 MB en base64; el cliente la reduce antes de enviarla
+const BONUS = 10; // caracteres que gana el propio equipo por cada acierto del minijuego
+const MAX_QUIZ = 3; // preguntas del minijuego por persona en cada turno (entre rotaciones)
+const FILE_COST = 120; // un archivo (foto, video, audio…) ocupa lo mismo que 120 caracteres de contexto
+const MAX_FILE = 80 * 1024 * 1024; // las fotos se reducen en el iPad; videos y audios suben tal cual
 
 const QUESTIONS = [
   ["¿Qué pasa cuando se llena la ventana de contexto?", "Se olvida lo más viejo", "Se guarda todo para siempre", "El agente se apaga"],
@@ -67,7 +70,7 @@ function freshState() {
     // queueSec: espera mínima en la cola para hablar con el Usuario · coolSec: espera tras cada conversación
     // liveSec: la conversación se cierra sola si pasa este tiempo sin mensajes
     cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true, queueSec: 60, coolSec: 60, liveSec: 60 },
-    images: {}, // imageId -> dataURL (fotos del Revisor)
+    files: {}, // fileId -> { type, name, size, team, at } (el contenido está en data/archivos/<fileId>)
     devices: {}, // deviceId -> { id, pc, role, team, personId, online }
     persons: {}, // personId -> { id, nick, history: [], deviceId }
     teams: [], // [{ msgs, bonus, bonusLog, forgot, forgotTotal, sent }]
@@ -77,19 +80,20 @@ function freshState() {
     paused: false,
     rot: null, // { assign: {personId: deviceId}, ready: {personId: true} }
     round: 1,
-    questions: {}, // deviceId -> { qi, order }
+    quiz: {}, // deviceId -> { done, q, seen } preguntas del minijuego en este turno
     queue: [], // modelos esperando al Usuario: [{ team, text, at, author }]
     live: null, // conversación abierta entre el Usuario y un Modelo: { team, since, lastAt }
   };
 }
-function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolUntil: 0 }; }
+// coolFrom: cuándo terminó su última conversación con el Usuario (el enfriamiento se calcula con la config actual)
+function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolFrom: 0 }; }
 
 const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const devList = () => Object.values(S.devices);
 const teamDevices = (t) => devList().filter((d) => d.team === t);
 const deviceAt = (t, role) => devList().find((d) => d.team === t && d.role === role);
 const limitOf = (t) => S.cfg.limit + S.teams[t].bonus;
-const costOf = (m) => m.text.length + (m.img ? IMG_COST : 0);
+const costOf = (m) => m.text.length + (m.file ? FILE_COST : 0);
 const usedOf = (t) => S.teams[t].msgs.reduce((n, m) => n + costOf(m), 0);
 const autoRot = () => S.cfg.autoRot !== false;
 // consumo del contexto por componente (quién lo escribió), para la barra por colores
@@ -134,18 +138,17 @@ function authorOf(dev) {
   const person = S.persons[dev.personId];
   return { role: dev.role, nick: person ? person.nick : "?", pc: dev.pc };
 }
-function addMsg(t, ch, author, text, imgData) {
+// file: id de un archivo ya subido por /subir (o null)
+function addMsg(t, ch, author, text, file) {
   const team = S.teams[t];
-  let img = null;
-  if (imgData) { img = crypto.randomBytes(9).toString("hex"); S.images[img] = imgData; }
-  team.msgs.push({ id: S.nextId++, ch, text, img, role: author.role, nick: author.nick, pc: author.pc, at: Date.now() });
+  team.msgs.push({ id: S.nextId++, ch, text, file: file || null, role: author.role, nick: author.nick, pc: author.pc, at: Date.now() });
   if (ch === "U" && S.live && S.live.team === t) S.live.lastAt = Date.now();
   team.sent++;
   enforce(t);
 }
 function dropMsg(team) {
   const m = team.msgs.shift();
-  if (m && m.img) delete S.images[m.img];
+  if (m && m.file && !fileInUse(m.file)) dropFile(m.file);
   return m;
 }
 function enforce(t) {
@@ -153,8 +156,8 @@ function enforce(t) {
   let total = usedOf(t), removed = 0;
   while (total > lim && team.msgs.length) {
     const first = team.msgs[0];
-    // una foto no se puede recortar: se olvida completa
-    if ((S.cfg.mode === "mensaje" && team.msgs.length > 1) || first.img) {
+    // un archivo no se puede recortar: se olvida completo
+    if ((S.cfg.mode === "mensaje" && team.msgs.length > 1) || first.file) {
       const c = costOf(first); dropMsg(team); removed += c; total -= c;
     } else {
       const cut = Math.min(total - lim, first.text.length);
@@ -164,6 +167,30 @@ function enforce(t) {
   }
   if (removed) { team.forgot = { n: removed, at: Date.now() }; team.forgotTotal += removed; }
 }
+
+// ---------- Archivos del Revisor (fotos, videos, audios…) ----------
+// Se guardan en disco y viajan como enlace /archivo/<id>. Un archivo puede estar en varios mensajes
+// (el Modelo reenvía al Usuario lo que le mandó el Revisor); se borra cuando ya nadie lo tiene.
+const fileKind = (type) => (/^image\/(jpeg|png|gif|webp|heic|heif)$/.test(type) ? "image" : /^video\//.test(type) ? "video" : /^audio\//.test(type) ? "audio" : "file");
+function fileInUse(id) {
+  return S.teams.some((tm) => tm.msgs.some((m) => m.file === id)) || S.queue.some((q) => q.file === id);
+}
+function dropFile(id) {
+  delete S.files[id];
+  fs.rm(path.join(FILES_DIR, id), { force: true }, () => {});
+}
+// archivos subidos que nunca se mandaron o que ya se olvidaron
+function gcFiles() {
+  const old = Date.now() - 10 * 60 * 1000;
+  Object.keys(S.files).forEach((id) => { if (S.files[id].at < old && !fileInUse(id)) dropFile(id); });
+}
+function wipeFiles() {
+  try { fs.rmSync(FILES_DIR, { recursive: true, force: true }); } catch (_) { /* no había archivos */ }
+}
+const fileOut = (id) => {
+  const f = id && S.files[id];
+  return f ? { url: "/archivo/" + id, kind: fileKind(f.type), name: f.name } : null;
+};
 
 // ---------- Cola de los Modelos para hablar con el Usuario ----------
 // El Usuario atiende a un Modelo a la vez. Cada Modelo que le escribe entra a la cola y espera
@@ -179,16 +206,18 @@ function serveQueue() {
   S.queue.shift();
   if (!S.teams[head.team]) return serveQueue();
   S.live = { team: head.team, since: Date.now(), lastAt: Date.now() };
-  addMsg(head.team, "U", head.author, head.text);
+  addMsg(head.team, "U", head.author, head.text, head.file);
   return true;
 }
 function endLive() {
   if (!S.live) return;
   const team = S.teams[S.live.team];
-  if (team) team.coolUntil = Date.now() + S.cfg.coolSec * 1000;
+  if (team) team.coolFrom = Date.now();
   S.live = null;
   serveQueue();
 }
+// se calcula con la config actual: si el admin cambia el enfriamiento, aplica al instante
+const coolUntilOf = (t) => (S.teams[t] && S.teams[t].coolFrom ? S.teams[t].coolFrom + S.cfg.coolSec * 1000 : 0);
 const liveEndsAt = () => (S.live ? (S.live.lastAt || S.live.since) + S.cfg.liveSec * 1000 : null);
 function liveTimeout() {
   if (!S.live || Date.now() < liveEndsAt()) return false;
@@ -213,7 +242,7 @@ function moveDevice(oldId, newId) {
   S.devices[newId] = d;
   Object.values(S.persons).forEach((p) => { if (p.deviceId === oldId) p.deviceId = newId; });
   if (S.rot) Object.keys(S.rot.assign).forEach((pid) => { if (S.rot.assign[pid] === oldId) S.rot.assign[pid] = newId; });
-  if (S.questions[oldId]) { S.questions[newId] = S.questions[oldId]; delete S.questions[oldId]; }
+  if (S.quiz[oldId]) { S.quiz[newId] = S.quiz[oldId]; delete S.quiz[oldId]; }
   return d;
 }
 
@@ -260,7 +289,7 @@ function finishRotation() {
     if (!p || !d) return;
     d.personId = p.id; p.deviceId = d.id; p.history.push(d.role);
   });
-  S.rot = null; S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.round++; S.questions = {};
+  S.rot = null; S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.round++; S.quiz = {};
 }
 function checkRotationDone() {
   if (S.phase !== "rotate") return;
@@ -268,15 +297,53 @@ function checkRotationDone() {
 }
 
 // ---------- Minijuego ----------
-function questionFor(devId) {
-  if (!S.questions[devId]) {
-    const qi = Math.floor(Math.random() * QUESTIONS.length);
-    S.questions[devId] = { qi, order: shuffle([1, 2, 3]) };
-  }
-  const q = S.questions[devId];
-  return { id: q.qi, text: QUESTIONS[q.qi][0], options: q.order.map((k) => ({ k, text: QUESTIONS[q.qi][k] })) };
+// Banco fijo (QUESTIONS) + preguntas generadas con números y palabras al azar, así casi nunca se repiten.
+// Cada pregunta es [texto, correcta, distractor, distractor]. Máximo MAX_QUIZ por persona en cada turno;
+// cada acierto suma BONUS caracteres al contexto de su propio equipo.
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+// tres números distintos y no negativos, el correcto primero; los errados van en el mismo paso
+// (si la respuesta es múltiplo de 10, los distractores también) para que no se adivine por descarte
+function nums(ok, spread, step = 1) {
+  const set = new Set([ok]);
+  while (set.size < 3) { const d = ok + pick([-1, 1]) * rnd(1, spread) * step; if (d >= 0) set.add(d); }
+  return [...set].map(String);
 }
-function neighborTeam(t) { return S.teams.length > 1 ? (t + 1) % S.teams.length : null; }
+const WORDS = ["el plano", "la medida", "la foto", "la orden", "el reporte", "la pregunta", "la idea", "el material", "el video", "la prueba"];
+const ROLE_QS = [
+  ["¿Quién es el único que puede hablar con el Usuario?", "El Modelo", "El Revisor", "El Arnés"],
+  ["¿A quién le escribe el Revisor?", "Al Modelo", "Al Arnés", "Al Usuario"],
+  ["¿Qué rol no escribe mensajes?", "El Arnés", "El Modelo", "El Revisor"],
+  ["¿Quién ejecuta lo que dice el Modelo?", "El Arnés", "El Revisor", "El Usuario"],
+  ["¿Quién describe las acciones del Arnés?", "El Revisor", "El Modelo", "El Usuario"],
+  ["¿Quién puede reenviarle al Usuario una foto del Revisor?", "El Modelo", "El Arnés", "El Revisor"],
+  ["El Modelo acaba de hablar con el Usuario. ¿Qué pasa si le quiere volver a escribir?", "Espera el enfriamiento", "Pasa primero en la cola", "Le escribe por el Revisor"],
+  ["¿Qué ve el Arnés?", "Las órdenes del Modelo y los reportes del Revisor", "Todo lo que dice el Usuario", "Nada"],
+];
+const GEN = [
+  () => { const lim = rnd(3, 12) * 50, used = rnd(1, lim / 10 - 1) * 10; return [`Tu equipo tiene ${lim} caracteres de contexto y ya usó ${used}. ¿Cuántos le quedan?`, ...nums(lim - used, 6, 10)]; },
+  () => { const n = rnd(2, 6) * 10, k = rnd(4, 12); return [`Si cada mensaje ocupa ${n} caracteres, ¿cuántos mensajes caben en ${n * k}?`, ...nums(k, 3)]; },
+  () => { const free = rnd(1, 6) * FILE_COST + rnd(0, FILE_COST - 1); return [`Una foto ocupa ${FILE_COST} caracteres de contexto. Con ${free} libres, ¿cuántas fotos caben?`, ...nums(Math.floor(free / FILE_COST), 2)]; },
+  () => { const ahead = rnd(1, 4), m = rnd(1, 3); return [`Hay ${ahead} Modelo${ahead > 1 ? "s" : ""} antes que tú en la cola, cada conversación dura ${m} min y la espera mínima es 1 min. ¿Cuántos minutos esperas como mínimo?`, ...nums(1 + ahead * m, 3).map((x) => x + " min")]; },
+  () => { const w = shuffle(WORDS).slice(0, 4); return [`El contexto guarda, del más viejo al más nuevo: ${w.join(", ")}. Si se llena, ¿qué se olvida primero?`, w[0], w[3], w[1]]; },
+  () => { const k = rnd(3, 12); return [`Si cada palabra son unos 2 tokens, ¿cuántos tokens tiene una frase de ${k} palabras?`, ...nums(2 * k, 4)]; },
+  () => { const total = rnd(4, 10) * 100, n = rnd(1, MAX_QUIZ); return [`Tu equipo tiene ${total} caracteres y acierta ${n} pregunta${n > 1 ? "s" : ""} del minijuego (+${BONUS} cada una). ¿Cuánto contexto tendrá?`, ...nums(total + n * BONUS, 3, BONUS)]; },
+  () => { const msgs = rnd(3, 8), len = rnd(2, 6) * 10; return [`Tu equipo mandó ${msgs} mensajes de ${len} caracteres y una foto (${FILE_COST}). ¿Cuánto contexto usó?`, ...nums(msgs * len + FILE_COST, 4, 10)]; },
+  () => pick(ROLE_QS),
+];
+const makeQuestion = () => (Math.random() < 0.35 ? pick(QUESTIONS) : pick(GEN)());
+function quizOf(devId) { return S.quiz[devId] || (S.quiz[devId] = { done: 0, q: null, seen: [] }); }
+function questionFor(devId) {
+  const z = quizOf(devId);
+  if (z.done >= MAX_QUIZ) return null;
+  if (!z.q) {
+    let q, tries = 0;
+    do q = makeQuestion(); while (z.seen.includes(q[0]) && ++tries < 30);
+    z.seen.push(q[0]);
+    z.q = { id: S.nextId++, text: q[0], answers: q.slice(1, 4), order: shuffle([0, 1, 2]) };
+  }
+  return { id: z.q.id, text: z.q.text, options: z.q.order.map((k) => ({ k, text: z.q.answers[k] })), n: z.done + 1 };
+}
 
 // ---------- Vistas (filtradas por rol en el servidor) ----------
 function deviceView(dev) {
@@ -303,33 +370,28 @@ function deviceView(dev) {
     v.context = { used: usedOf(t), by: usedBy(t), limit: limitOf(t), base: S.cfg.limit, bonus: team.bonus, bonusLog: team.bonusLog, forgot: team.forgot, oldestId: team.msgs[0] ? team.msgs[0].id : null };
     v.msgs = team.msgs.filter((m) => READ[dev.role].includes(m.ch)).map((m) => msgOut(m, dev.pc));
     if (dev.role === "modelo") {
-      v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: team.coolUntil || 0, waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec };
+      v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: coolUntilOf(t), waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec };
     }
-    if (S.phase === "activity") {
-      v.question = questionFor(dev.id);
-      const nt = neighborTeam(t);
-      const n = nt === null ? null : deviceAt(nt, dev.role);
-      v.neighborPc = n ? n.pc : null;
-    }
+    if (S.phase === "activity") { v.question = questionFor(dev.id); v.quizMax = MAX_QUIZ; v.quizBonus = BONUS; }
   }
   return v;
 }
 
-// las fotos viajan como enlace (/img/<id>), no dentro de la vista, para no mandar megas cada segundo
-const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, role: m.role, nick: m.nick, img: m.img ? "/img/" + m.img : null, mine: pc !== undefined && m.pc === pc });
+// los archivos viajan como enlace (/archivo/<id>), no dentro de la vista, para no mandar megas cada segundo
+const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, role: m.role, nick: m.nick, file: fileOut(m.file), mine: pc !== undefined && m.pc === pc });
 
 function adminView() {
   return {
     kind: "admin", phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(), now: Date.now(),
     live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
-    queue: S.queue.map((q) => ({ team: q.team, text: q.text, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
+    queue: S.queue.map((q) => ({ team: q.team, text: q.text, file: !!q.file, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
     devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
       id: d.id, pc: d.pc, role: d.role, team: d.team, online: d.online,
       nick: d.personId && S.persons[d.personId] ? S.persons[d.personId].nick : null,
     })),
     teams: S.teams.map((tm, t) => ({
       used: usedOf(t), by: usedBy(t), limit: limitOf(t), bonus: tm.bonus, sent: tm.sent, forgotTotal: tm.forgotTotal,
-      warnings: teamWarnings(t), msgs: tm.msgs.map((m) => msgOut(m)), coolUntil: tm.coolUntil || 0,
+      warnings: teamWarnings(t), msgs: tm.msgs.map((m) => msgOut(m)), coolUntil: coolUntilOf(t),
     })),
     rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
       nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
@@ -386,14 +448,9 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     return res.end(conectarPage());
   }
-  const im = urlPath.match(/^\/img\/([0-9a-f]{18})$/);
-  if (im) {
-    const data = S.images[im[1]];
-    const m = data && data.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
-    if (!m) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { "Content-Type": m[1], "Cache-Control": "private, max-age=3600" });
-    return res.end(Buffer.from(m[2], "base64"));
-  }
+  if (req.method === "POST" && urlPath === "/subir") return upload(req, res);
+  const fm = urlPath.match(/^\/archivo\/([0-9a-f]{18})$/);
+  if (fm) return serveFile(req, res, fm[1]);
   const rel = urlPath === "/" || urlPath === "/admin" ? "/index.html" : urlPath;
   const file = path.normalize(path.join(PUBLIC, rel));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
@@ -403,7 +460,58 @@ const server = http.createServer((req, res) => {
     res.end(buf);
   });
 });
-const io = new Server(server, { pingInterval: 10000, pingTimeout: 8000, maxHttpBufferSize: 3e6 });
+// El Revisor sube un archivo (cuerpo crudo; tipo en Content-Type, nombre en X-Name, su iPad en X-Device)
+function upload(req, res) {
+  const answer = (code, body) => { if (res.headersSent) return; res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" }); res.end(JSON.stringify(body)); };
+  const fail = (code, error) => { answer(code, { error }); req.resume(); };
+  const dev = S.devices[String(req.headers["x-device"] || "")];
+  if (!dev || dev.role !== "revisor" || dev.team === null || S.phase !== "activity") return fail(403, "Solo el Revisor puede mandar archivos durante la actividad.");
+  const type = String(req.headers["content-type"] || "application/octet-stream").split(";")[0].trim().toLowerCase();
+  if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(type)) return fail(400, "Tipo de archivo no válido.");
+  if (Number(req.headers["content-length"]) > MAX_FILE) return fail(413, "El archivo es muy grande (máximo 80 MB).");
+  let name = "";
+  try { name = cleanText(decodeURIComponent(String(req.headers["x-name"] || "")), 80); } catch (_) { /* nombre ilegible */ }
+  const id = crypto.randomBytes(9).toString("hex"), file = path.join(FILES_DIR, id);
+  fs.mkdirSync(FILES_DIR, { recursive: true });
+  const out = fs.createWriteStream(file);
+  let size = 0, failed = false;
+  const abort = (code, error) => { if (failed) return; failed = true; req.unpipe(out); out.destroy(); fs.rm(file, { force: true }, () => {}); fail(code, error); };
+  req.on("data", (c) => { size += c.length; if (size > MAX_FILE) abort(413, "El archivo es muy grande (máximo 80 MB)."); });
+  req.on("aborted", () => abort(400, "Se cortó la subida."));
+  out.on("error", () => abort(500, "No se pudo guardar el archivo."));
+  out.on("finish", () => {
+    if (failed) return;
+    if (!size) { fs.rm(file, { force: true }, () => {}); return answer(400, { error: "El archivo está vacío." }); }
+    S.files[id] = { type, name, size, team: dev.team, at: Date.now() };
+    saveSoon();
+    answer(200, { ok: true, id });
+  });
+  req.pipe(out);
+}
+// Sirve un archivo con soporte de rangos (Safari los necesita para reproducir video)
+function serveFile(req, res, id) {
+  const meta = S.files[id], file = path.join(FILES_DIR, id);
+  let size;
+  try { size = fs.statSync(file).size; } catch (_) { size = -1; }
+  if (!meta || size < 0) { res.writeHead(404); return res.end(); }
+  // solo fotos, videos y audios se muestran en la página; lo demás se descarga, para que nadie suba una página web
+  const kind = fileKind(meta.type), inline = kind !== "file";
+  const headers = {
+    "Content-Type": inline ? meta.type : "application/octet-stream", "Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name || "archivo")}`,
+  };
+  const r = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
+  if (r && (r[1] || r[2])) {
+    const start = r[1] ? Number(r[1]) : Math.max(0, size - Number(r[2])), end = r[1] && r[2] ? Math.min(Number(r[2]), size - 1) : size - 1;
+    if (start >= size || start > end) { res.writeHead(416, { "Content-Range": `bytes */${size}` }); return res.end(); }
+    res.writeHead(206, { ...headers, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": end - start + 1 });
+    return fs.createReadStream(file, { start, end }).pipe(res);
+  }
+  res.writeHead(200, { ...headers, "Content-Length": size });
+  if (req.method === "HEAD") return res.end();
+  fs.createReadStream(file).pipe(res);
+}
+const io = new Server(server, { pingInterval: 10000, pingTimeout: 8000 });
 
 // ---------- Sincronización ----------
 let syncQueued = false;
@@ -434,23 +542,25 @@ function saveSoon() {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       const tmp = SNAPSHOT + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify({ savedAt: Date.now(), state: S }));
+      fs.writeFileSync(tmp, JSON.stringify({ version: SNAPSHOT_VERSION, savedAt: Date.now(), state: S }));
       fs.renameSync(tmp, SNAPSHOT);
     } catch (e) { console.error("No se pudo guardar el respaldo:", e.message); }
   }, 2000);
 }
 function loadSnapshot() {
-  if (process.argv.includes("--nueva")) return;
-  try {
-    const raw = JSON.parse(fs.readFileSync(SNAPSHOT, "utf8"));
-    if (Date.now() - raw.savedAt > SNAPSHOT_MAX_AGE_MS) return;
-    const fresh = freshState();
-    // un respaldo de la versión con Thinking no sirve: se empieza de cero
-    if (Object.values(raw.state.devices || {}).some((d) => !ROLES.includes(d.role))) return;
-    S = { ...fresh, ...raw.state, cfg: { ...fresh.cfg, ...raw.state.cfg } };
-    devList().forEach((d) => (d.online = false));
-    console.log(`Sesión ${S.code} recuperada del respaldo (${devList().length} dispositivos).`);
-  } catch (_) { /* sin respaldo: sesión nueva */ }
+  if (!process.argv.includes("--nueva")) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(SNAPSHOT, "utf8"));
+      if (raw.version === SNAPSHOT_VERSION && Date.now() - raw.savedAt <= SNAPSHOT_MAX_AGE_MS) {
+        const fresh = freshState();
+        S = { ...fresh, ...raw.state, cfg: { ...fresh.cfg, ...raw.state.cfg } };
+        devList().forEach((d) => (d.online = false));
+        console.log(`Sesión ${S.code} recuperada del respaldo (${devList().length} dispositivos).`);
+        return;
+      }
+    } catch (_) { /* sin respaldo: sesión nueva */ }
+  }
+  wipeFiles(); // sesión nueva: los archivos de la anterior ya no sirven
 }
 
 // ---------- Eventos ----------
@@ -516,8 +626,26 @@ io.on("connection", (sock) => {
     sync();
   });
 
-  // to: Modelo → "arnes" | "usuario" · Revisor → "modelo" | "arnes"; image: dataURL de una foto (solo el Revisor)
-  sock.on("send", ({ text, to, image } = {}, cb) => {
+  // El Modelo le escribe al Usuario: dentro de la conversación abierta llega al instante;
+  // si no, entra a la cola (salvo que ya esté en ella o en enfriamiento)
+  function toUsuario(dev, text, file, cb) {
+    const t = dev.team;
+    if (S.live && S.live.team === t) {
+      addMsg(t, "U", authorOf(dev), text, file);
+      reply(cb, { ok: true, sent: text });
+      return sync();
+    }
+    if (queuePos(t) >= 0) return reply(cb, { error: `Ya estás en la cola del Usuario (puesto ${queuePos(t) + 1}). Espera tu turno.` });
+    const left = Math.ceil((coolUntilOf(t) - Date.now()) / 1000);
+    if (left > 0) return reply(cb, { error: `Debes esperar ${left} s para volver a escribirle al Usuario.` });
+    S.queue.push({ team: t, text, file: file || null, at: Date.now(), author: authorOf(dev) });
+    serveQueue();
+    reply(cb, { ok: true, queued: queuePos(t) >= 0, pos: queuePos(t) + 1 });
+    sync();
+  }
+
+  // to: Modelo → "arnes" | "usuario" · Revisor → "modelo"; file: id de un archivo subido por /subir (solo el Revisor)
+  sock.on("send", ({ text, to, file } = {}, cb) => {
     const dev = myDevice();
     text = cleanText(text, MAX_MSG);
     if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no se puede enviar." });
@@ -526,47 +654,44 @@ io.on("connection", (sock) => {
     if (!Object.keys(dests).length) return reply(cb, { error: "Tu rol no escribe: ejecutas lo que diga el Modelo." });
     if (to !== undefined && !dests[to]) return reply(cb, { error: "Tu rol no le puede escribir a ese rol." });
     const ch = dests[to || Object.keys(dests)[0]];
-    let img = null;
-    if (image !== undefined && image !== null) {
-      if (dev.role !== "revisor") return reply(cb, { error: "Solo el Revisor puede mandar fotos." });
-      if (typeof image !== "string" || !/^data:image\/(jpeg|png|webp);base64,/.test(image) || image.length > MAX_IMG) return reply(cb, { error: "La foto no es válida o es muy grande." });
-      img = image;
-    }
-    if (!text && !img) return reply(cb, { error: "Escribe algo antes de enviar." });
-    const t = dev.team;
-    if (ch === "U" && !(S.live && S.live.team === t)) {
-      // fuera de una conversación abierta, el Modelo entra a la cola del Usuario
-      if (queuePos(t) >= 0) return reply(cb, { error: `Ya estás en la cola del Usuario (puesto ${queuePos(t) + 1}). Espera tu turno.` });
-      const left = Math.ceil(((S.teams[t].coolUntil || 0) - Date.now()) / 1000);
-      if (left > 0) return reply(cb, { error: `Debes esperar ${left} s para volver a escribirle al Usuario.` });
-      S.queue.push({ team: t, text, at: Date.now(), author: authorOf(dev) });
-      serveQueue();
-      reply(cb, { ok: true, queued: queuePos(t) >= 0, pos: queuePos(t) + 1 });
-      return sync();
-    }
-    addMsg(t, ch, authorOf(dev), text, img);
+    if (file !== undefined && file !== null) {
+      if (dev.role !== "revisor") return reply(cb, { error: "Solo el Revisor puede mandar archivos. El Modelo reenvía los del Revisor." });
+      const f = S.files[file];
+      if (!f || f.team !== dev.team || fileInUse(file)) return reply(cb, { error: "Ese archivo no es válido. Vuelve a escogerlo." });
+    } else file = null;
+    if (!text && !file) return reply(cb, { error: "Escribe algo antes de enviar." });
+    if (ch === "U") return toUsuario(dev, text, null, cb);
+    addMsg(dev.team, ch, authorOf(dev), text, file);
     reply(cb, { ok: true, sent: text });
     sync();
+  });
+
+  // El Modelo le reenvía al Usuario un archivo que le mandó el Revisor (con un texto opcional)
+  sock.on("forward", ({ id, text } = {}, cb) => {
+    const dev = myDevice();
+    if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no se puede enviar." });
+    if (S.paused) return reply(cb, { error: "La actividad está en pausa." });
+    if (dev.role !== "modelo") return reply(cb, { error: "Solo el Modelo le puede reenviar archivos al Usuario." });
+    const m = S.teams[dev.team].msgs.find((x) => x.id === Number(id) && x.ch === "R" && x.file);
+    if (!m || !S.files[m.file]) return reply(cb, { error: "Ese archivo ya no está en tu contexto." });
+    toUsuario(dev, cleanText(text, MAX_MSG), m.file, cb);
   });
 
   sock.on("answer", ({ qid, k } = {}, cb) => {
     const dev = myDevice();
     if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no." });
-    const q = S.questions[dev.id];
-    if (!q || q.qi !== qid) return reply(cb, { error: "Esa pregunta ya cambió." });
-    delete S.questions[dev.id];
-    const correct = k === 1;
-    let toPc = null;
+    const z = S.quiz[dev.id];
+    if (!z || !z.q || z.q.id !== qid) return reply(cb, { error: "Esa pregunta ya cambió." });
+    const q = z.q;
+    z.q = null; z.done++;
+    const correct = k === 0;
     if (correct) {
-      const nt = neighborTeam(dev.team);
-      if (nt !== null) {
-        const team = S.teams[nt], person = S.persons[dev.personId], n = deviceAt(nt, dev.role);
-        team.bonus += BONUS;
-        team.bonusLog = `+${BONUS} de ${person ? person.nick : "un vecino"} (PC ${dev.pc})`;
-        toPc = n ? n.pc : null;
-      }
+      // el acierto suma al contexto del propio equipo
+      const team = S.teams[dev.team], person = S.persons[dev.personId];
+      team.bonus += BONUS;
+      team.bonusLog = `+${BONUS} de ${person ? person.nick : "alguien"} (PC ${dev.pc})`;
     }
-    reply(cb, { ok: true, correct, correctText: QUESTIONS[qid][1], toPc, bonus: BONUS });
+    reply(cb, { ok: true, correct, correctText: q.answers[0], bonus: BONUS, left: MAX_QUIZ - z.done });
     sync();
   });
 
@@ -665,13 +790,13 @@ io.on("connection", (sock) => {
       if (S.live && S.live.team === dev.team) endLive();
     }
     delete S.devices[deviceId];
-    delete S.questions[deviceId];
+    delete S.quiz[deviceId];
     if (S.phase === "lobby") pruneEmptyTeams();
   });
   adminOn("admin:start", () => {
     if (S.phase !== "lobby") return "La actividad ya empezó.";
     if (!S.teams.some((_, t) => CORE.every((r) => deviceAt(t, r)))) return "Se necesita al menos un equipo con Modelo y Arnés.";
-    S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.paused = false;
+    S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.paused = false; S.quiz = {};
   });
   adminOn("admin:prompt", ({ text, team }) => {
     text = cleanText(text, 600);
@@ -691,7 +816,7 @@ io.on("connection", (sock) => {
   });
   adminOn("admin:forceResume", () => { if (S.phase !== "rotate") return; Object.keys(S.rot.assign).forEach((pid) => (S.rot.ready[pid] = true)); finishRotation(); });
   adminOn("admin:end", () => { S.phase = "end"; S.rot = null; S.paused = false; S.queue = []; S.live = null; });
-  adminOn("admin:reset", () => { S = freshState(); });
+  adminOn("admin:reset", () => { S = freshState(); wipeFiles(); });
 
   sock.on("disconnect", () => {
     const dev = myDevice();
@@ -711,6 +836,8 @@ setInterval(() => {
   }
   if (all) sync(); else syncAdmins();
 }, 1000);
+
+setInterval(gcFiles, 60 * 1000);
 
 // ---------- Arranque ----------
 loadSnapshot();
@@ -750,4 +877,4 @@ server.on("error", (e) => {
 });
 server.listen(PORT, "0.0.0.0");
 
-module.exports = { server };
+module.exports = { server, makeQuestion };

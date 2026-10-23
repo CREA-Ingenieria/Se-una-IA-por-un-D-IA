@@ -100,7 +100,7 @@ El hotspot de Windows tiene límites:
 3. **Ajustes**: en la tabla del admin se cambia el rol o el equipo de cualquier iPad; si el puesto ya está ocupado, se intercambian. Para iniciar, cada equipo necesita al menos Modelo y Arnés; sin Revisor nadie le da retroalimentación al Modelo.
 4. **Iniciar actividad** y **enviar el prompt** a todos los Modelos o a un solo equipo.
 5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso.
-6. **Minijuego**: al lado del chat hay preguntas cortas. Cada acierto da +40 caracteres al **vecino de mesa** (mismo rol, equipo siguiente), nunca a quien responde.
+6. **Minijuego**: al lado del chat hay preguntas cortas, **máximo 3 por persona en cada turno** (se renuevan con cada rotación). Cada acierto da **+10 caracteres al propio equipo**. Además del banco fijo, el servidor genera preguntas con números y palabras al azar (cuentas de contexto, la cola, quién habla con quién…), así casi nunca se repiten.
 7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), cada iPad muestra en blanco "nick, levántate y ve al PC X" y en grande **ESTE ES EL PC Y**. El sistema escoge un PC al azar con un rol que esa persona no ha hecho. Quien llega toca **¡LISTO!** y, cuando todos están listos, la actividad sigue. El rol y el equipo están atados al iPad, no a la persona.
 8. **Terminar** muestra un resumen por equipo. **Nueva sesión** borra todo.
 
@@ -112,7 +112,7 @@ La frase de cada rol: **Modelo: Piensa** · **Arnés: Ejecuta lo que diga el Mod
 |---|---|
 | U | Usuario (profesor) ↔ Modelo. **El Modelo es el único que habla con el Usuario.** El Arnés y el Revisor no lo ven |
 | C | Modelo → Arnés. El Revisor no lo ve |
-| R | Revisor → Modelo: describe lo que hace el Arnés, con texto o **fotos**. El Arnés también lo lee |
+| R | Revisor → Modelo: describe lo que hace el Arnés, con texto o **archivos** (fotos, videos, audios…). El Arnés también lo lee |
 
 El Modelo no le escribe al Revisor y al Revisor no le llega ningún mensaje del Modelo. El Revisor no le escribe al Arnés. El Arnés solo recibe: las órdenes del Modelo y lo que el Revisor le reporta al Modelo. Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se puede plegar:
 
@@ -128,19 +128,21 @@ Varios equipos juegan a la vez y el Usuario atiende a **un Modelo a la vez**:
 - Cuando un Modelo le escribe al Usuario, su mensaje **entra a una cola** (botón *Hacer fila*). Espera al menos el tiempo de cola (1 min por defecto) y, además, a que el Usuario termine con los que llegaron antes. Con Modelo 1, 2 y 3 en fila: el 1 espera 1 min, el 2 espera 1 min + lo que tome atender al 1, y el 3 espera 1 min + lo que tome atender al 1 y al 2.
 - Cuando le llega el turno, se abre la **conversación**: en el iPad del Modelo y en el panel del admin el chat se agranda y los mensajes van y vienen **al instante, sin cola ni espera**.
 - El admin la cierra con **Terminar y atender al siguiente**. Si se le olvida, la conversación **se cierra sola tras 1 min sin mensajes** (ajustable), para que la cola no se quede detenida; cada mensaje de cualquiera de los dos reinicia ese minuto. Desde ahí, ese Modelo queda en **enfriamiento** (1 min por defecto) antes de poder volver a hacer fila.
-- La espera de la cola, el enfriamiento y el cierre automático se ajustan en el panel admin (antes de empezar y en plena actividad).
+- La espera de la cola, el enfriamiento y el cierre automático se ajustan en el panel admin (antes de empezar y en plena actividad). **Los cambios aplican al instante**, también a los Modelos que ya están esperando o en enfriamiento: no hay que esperar a la siguiente conversación ni a la rotación.
 - El Usuario puede escribirle a cualquier Modelo cuando quiera (prompt o *Ver los canales*); eso no pasa por la cola.
 
 **Teclado del iPad**: al tocar el campo para escribir, el chat se ajusta al espacio que queda sobre el teclado y baja hasta el último mensaje, para que el teclado no tape la conversación.
 
-**Fotos del Revisor**: el botón de cámara abre la cámara del iPad. La foto se reduce en el iPad (máximo 1280 px) antes de enviarse y ocupa 120 caracteres de contexto. Cuando se olvida, se borra también del servidor.
+**Archivos del Revisor**: el botón de cámara deja tomar una foto o un video, o escoger una foto, video, audio o PDF del iPad (máximo 80 MB). Las fotos se reducen en el iPad (máximo 1280 px) antes de enviarse; videos y audios suben tal cual. Cada archivo ocupa 120 caracteres de contexto. Se guardan en `data/archivos` y se borran cuando ya ningún chat los tiene, o con *Nueva sesión*.
+
+**Reenviar al Usuario**: debajo de cada archivo que le llega del Revisor, el Modelo tiene el botón *Reenviar al Usuario*. Si está conversando con el Usuario llega al instante; si no, entra a la cola como cualquier mensaje. Si el Modelo tiene escrito un texto para el Usuario, viaja con el archivo.
 
 ### Panel admin durante la actividad
 
 - **Rotación**: interruptor *Automática / Detenida* (detenida = el reloj no corre), −1 min, +1 min, *Reiniciar a…*, duración entre rotaciones y *Rotar ya*. Todo se puede cambiar en cualquier momento.
 - **Contexto base**: −50 / +50 caracteres por equipo, en vivo. Si se baja, cada equipo olvida lo que ya no quepa.
 - **Cola de Modelos**: arriba se ve quién está esperando, cuánto le falta y qué escribió. La conversación abierta aparece en un chat grande con el botón *Terminar y atender al siguiente*; la tarjeta de ese equipo se ilumina en amarillo.
-- **Cola y enfriamiento**: se cambian en vivo desde los controles.
+- **Cola, enfriamiento y cierre sin mensajes**: se cambian en vivo desde los controles y aplican al instante.
 - *Pausar actividad*, ver los canales de cualquier equipo y *Reanudar sin esperar* durante una rotación.
 
 ## Si algo falla

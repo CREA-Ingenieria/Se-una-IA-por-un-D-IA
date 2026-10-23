@@ -179,6 +179,11 @@ table.devs{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
 .bubble .photo{display:block;margin:4px 0 6px}
 .bubble .photo img{display:block;max-width:min(320px,100%);max-height:260px;border-radius:10px;object-fit:cover}
 .thumb{display:block;max-width:100%;max-height:140px;border-radius:8px;margin:4px 0}
+.bubble .media{display:block;width:360px;max-width:100%;max-height:300px;margin:4px 0 6px;border-radius:10px;background:#000}
+.bubble audio.media{height:40px;background:transparent}
+.chcol .media{display:block;width:100%;margin:4px 0}
+.filelink{display:inline-flex;align-items:center;gap:6px;margin:4px 0 6px;padding:6px 12px;border-radius:999px;background:var(--pill);color:#fff;text-decoration:none;font:600 13px var(--ui)}
+.bubble .fwd{display:block;margin-top:8px;background:var(--y);color:#000;min-height:34px}
 
 /* Frase que define cada rol */
 .phrase{font:900 clamp(22px,3.4vw,34px) var(--display);letter-spacing:-.02em}

@@ -3,7 +3,7 @@
 process.env.PORT = process.env.PORT || "3999";
 process.env.SEUNAIA_SIN_MDNS = "1";
 process.argv.push("--nueva");
-const { server } = require("../server.js");
+const { server, makeQuestion } = require("../server.js");
 const { io } = require("socket.io-client");
 const URL = `http://localhost:${process.env.PORT}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -86,36 +86,78 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   await wait(2200);
   check(admin.last.live === null, "si nadie escribe, la conversación se cierra sola");
   check(admin.last.teams[1].coolUntil > Date.now(), "el cierre automático también deja al Modelo en enfriamiento");
+  check((await call(pads[3], "send", { text: "¿otra?", to: "usuario" })).error, "en enfriamiento no puede volver a escribir");
+  await call(admin, "admin:config", { coolSec: 0, queueSec: 0, liveSec: 60 });
+  await wait(100);
+  check(admin.last.teams[1].coolUntil <= Date.now() && admin.last.teams[0].coolUntil <= Date.now(), "si el admin quita el enfriamiento, aplica al instante");
+  check((await call(pads[3], "send", { text: "¿otra?", to: "usuario" })).ok, "el Modelo ya puede escribir sin esperar la rotación");
+  await call(admin, "admin:config", { coolSec: 120 });
+  await wait(100);
+  check(admin.last.live && admin.last.live.team === 1, "con cola en 0 lo atienden de inmediato");
+  await call(admin, "admin:endLive", {});
+  await wait(100);
+  check(pads[3].last.usuario.coolUntil - Date.now() > 100 * 1000, "subir el enfriamiento también aplica al instante");
+  await call(admin, "admin:config", { coolSec: 0 });
 
   await call(admin, "admin:config", { limit: 100 });
   await call(pads[0], "send", { text: "x".repeat(90), to: "arnes" });
   await wait(100);
   check(pads[0].last.context.used <= 100, "ventana de contexto borra lo más viejo (" + pads[0].last.context.used + "/100)");
+
+  // --- minijuego ---
+  const bank = Array.from({ length: 2000 }, makeQuestion);
+  check(bank.every((x) => x.length === 4 && x.every((s) => typeof s === "string" && s) && new Set(x.slice(1)).size === 3), "el banco de preguntas genera preguntas con 3 respuestas distintas");
+  check(new Set(bank.map((x) => x[0])).size > 300, "el banco se expande: " + new Set(bank.map((x) => x[0])).size + " preguntas distintas en 2000");
   const q = pads[0].last.question;
-  const r = await call(pads[0], "answer", { qid: q.id, k: 1 });
+  check(q && q.n === 1, "el minijuego muestra la pregunta 1 de " + pads[0].last.quizMax);
+  const r = await call(pads[0], "answer", { qid: q.id, k: 0 });
   await wait(100);
-  check(r.correct && pads[3].last.context.limit === 140, "acierto da +40 al vecino de mesa (límite " + pads[3].last.context.limit + ")");
-  check(pads[0].last.context.limit === 100, "el que acierta no gana para sí");
+  check(r.correct && pads[0].last.context.limit === 110, "un acierto da +10 al propio equipo (límite " + pads[0].last.context.limit + ")");
+  check(pads[3].last.context.limit === 100, "el otro equipo no gana nada");
+  for (let i = 0; i < 2; i++) { const qq = pads[0].last.question; await call(pads[0], "answer", { qid: qq.id, k: 1 }); await wait(80); }
+  check(pads[0].last.question === null && pads[0].last.context.limit === 110, "máximo 3 preguntas por turno (las erradas no suman)");
+  check((await call(pads[0], "answer", { qid: q.id, k: 0 })).error, "no se puede responder una cuarta");
 
   // --- contexto base y rotación se cambian en plena actividad ---
   await call(admin, "admin:config", { limit: 600 });
   await wait(100);
-  check(pads[0].last.context.base === 600 && pads[0].last.context.limit === 600, "el admin cambia el contexto base en vivo");
+  check(pads[0].last.context.base === 600 && pads[0].last.context.limit === 610, "el admin cambia el contexto base en vivo (600 + 10 del minijuego)");
   await call(admin, "admin:config", { autoRot: false });
   await call(admin, "admin:setTimer", { sec: 90 });
   await wait(2200);
   check(admin.last.timerLeft === 90 && admin.last.cfg.autoRot === false, "con la rotación detenida el reloj no corre");
   await call(admin, "admin:config", { autoRot: true });
 
-  // --- fotos del Revisor ---
-  const jpg = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
-  check((await call(pads[2], "send", { text: "así va", to: "modelo", image: jpg })).ok, "Revisor manda una foto al Modelo");
+  // --- archivos del Revisor (fotos, videos, audios…) y reenvío al Usuario ---
+  const jpg = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+  const up = (dev, body, type, name) => fetch(`${URL}/subir`, { method: "POST", headers: { "Content-Type": type, "X-Device": dev, "X-Name": encodeURIComponent(name) }, body }).then((x) => x.json());
+  const foto = await up("ipad-2", jpg, "image/jpeg", "foto.jpg");
+  check(!!foto.id, "el Revisor sube una foto");
+  check(!!(await up("ipad-0", jpg, "image/jpeg", "x.jpg")).error, "el Modelo no puede subir archivos");
+  check((await call(pads[2], "send", { text: "así va", to: "modelo", file: foto.id })).ok, "Revisor manda la foto al Modelo");
+  const video = await up("ipad-2", Buffer.alloc(5000, 1), "video/mp4", "avance.mp4");
+  const audio = await up("ipad-2", Buffer.alloc(800, 2), "audio/mp4", "nota.m4a");
+  check((await call(pads[2], "send", { text: "video", to: "modelo", file: video.id })).ok && (await call(pads[2], "send", { text: "", to: "modelo", file: audio.id })).ok, "Revisor manda un video y un audio");
+  check((await call(pads[2], "send", { text: "otra vez", to: "modelo", file: foto.id })).error, "un archivo ya enviado no se puede volver a mandar");
   await wait(100);
-  const ph = pads[0].last.msgs.find((m) => m.img);
-  check(!!ph, "el Modelo recibe la foto");
-  const res = ph ? await fetch(`${URL}${ph.img}`) : null;
-  check(res && res.status === 200 && res.headers.get("content-type") === "image/jpeg", "la foto se descarga por /img");
-  check((await call(pads[0], "send", { text: "x", to: "arnes", image: jpg })).error, "el Modelo no puede mandar fotos");
+  const kinds = pads[0].last.msgs.filter((m) => m.file).map((m) => m.file.kind).sort().join(",");
+  check(kinds === "audio,image,video", "el Modelo recibe foto, video y audio: " + kinds);
+  check(pads[1].last.msgs.filter((m) => m.file).length === 3, "el Arnés también los ve");
+  const ph = pads[0].last.msgs.find((m) => m.file && m.file.kind === "image"), vm = pads[0].last.msgs.find((m) => m.file && m.file.kind === "video");
+  const res = await fetch(URL + ph.file.url);
+  check(res.status === 200 && res.headers.get("content-type") === "image/jpeg", "la foto se descarga por /archivo");
+  const rr = await fetch(URL + vm.file.url, { headers: { Range: "bytes=0-99" } });
+  check(rr.status === 206 && rr.headers.get("content-range") === "bytes 0-99/5000", "el video se sirve por partes (Safari lo necesita)");
+  const web = await up("ipad-2", Buffer.from("<script>alert(1)</script>"), "text/html", "x.html");
+  const wr = await fetch(`${URL}/archivo/${web.id}`);
+  check(wr.headers.get("content-type") === "application/octet-stream" && /attachment/.test(wr.headers.get("content-disposition")), "un archivo que no es foto, video ni audio se descarga, no se abre como página");
+  check((await call(pads[0], "send", { text: "x", to: "arnes", file: foto.id })).error, "el Modelo no manda archivos propios");
+  check((await call(pads[2], "forward", { id: vm.id })).error, "solo el Modelo reenvía al Usuario");
+  const fw = await call(pads[0], "forward", { id: vm.id, text: "mire el avance" });
+  await wait(100);
+  check(fw.ok && admin.last.teams[0].msgs.some((m) => m.ch === "U" && m.file && m.file.kind === "video" && m.text === "mire el avance"), "el Modelo le reenvía el video al Usuario");
+  check(!pads[2].last.msgs.some((m) => m.ch === "U"), "el Revisor no ve lo que el Modelo le reenvía al Usuario");
+  await call(admin, "admin:endLive", {});
 
   // --- reconexión por nickname ---
   const otro = io(URL, { forceNew: true });
@@ -148,6 +190,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   const roleOfNick = {};
   pads.forEach((p) => (roleOfNick[p.last.you.nick] = p.last.you.role));
   check(Object.entries(roleOfNick).every(([nick, role]) => role !== before[+nick.slice(1)]), "nadie repite rol");
+  check(pads.every((p) => p.last.question && p.last.question.n === 1), "tras rotar, el minijuego vuelve a tener 3 preguntas");
   pads.forEach((p) => p.close()); admin.close();
   server.close();
   console.log(fails ? `\n${fails} prueba(s) fallaron` : "\nTodo bien.");

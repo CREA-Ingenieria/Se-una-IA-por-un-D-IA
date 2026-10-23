@@ -24,7 +24,7 @@ const RULES = {
     "Piensas el plan. Eres el único que habla con el Usuario.",
     "Para escribirle al Usuario entras a una cola y esperas tu turno. Cuando te atiende, conversan al instante.",
     "Después de cada conversación con el Usuario debes esperar un rato antes de volver a escribirle.",
-    "Le das órdenes al Arnés y recibes la retroalimentación del Revisor.",
+    "Le das órdenes al Arnés y recibes la retroalimentación del Revisor. Sus fotos, videos y audios se los puedes reenviar al Usuario.",
     "No le escribes al Revisor.",
   ],
   arnes: [
@@ -34,7 +34,7 @@ const RULES = {
   ],
   revisor: [
     "Describes las acciones del Arnés: qué hace y cómo va.",
-    "Solo le escribes al Modelo: reportes y fotos del avance. El Arnés también lo lee.",
+    "Solo le escribes al Modelo: reportes, fotos, videos o audios del avance. El Arnés también lo lee.",
     "No le escribes al Arnés ni al Usuario, y no ves lo que escribe el Modelo.",
     "No tocas los materiales.",
   ],
@@ -42,11 +42,12 @@ const RULES = {
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
 const credits = () => `<footer class="credits">Creado por ${AUTHORS.map(esc).join(" · ")} y el equipo CREA · Facultad de Ingeniería, Universidad de los Andes</footer>`;
 const RULE_ALL ="Prohibido usar internet, el celular o buscar información: el agente solo sabe lo que está en el chat.";
+const clipIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.5 3.5 0 0 1 5 5L10.5 18a2 2 0 0 1-3-3L15 7.5"/></svg>`;
 const camIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="14" r="3.5"/></svg>`;
 const HINT = {
   modelo: "Piensa. Recibes el encargo del Usuario y la retroalimentación del Revisor, y lo conviertes en órdenes claras para el Arnés. Para hablar con el Usuario haces fila.",
   arnes: "Ejecuta lo que diga el Modelo. Lees sus órdenes y lo que el Revisor le reporta al Modelo, y construyes con las manos. No escribes.",
-  revisor: "Describe las acciones del Arnés. Miras lo que construye y se lo cuentas al Modelo, con texto o fotos. No ves lo que escribe el Modelo.",
+  revisor: "Describe las acciones del Arnés. Miras lo que construye y se lo cuentas al Modelo, con texto, fotos, videos o audios. No ves lo que escribe el Modelo.",
 };
 
 const IS_ADMIN = location.pathname.replace(/\/+$/, "") === "/admin";
@@ -177,10 +178,18 @@ function rulesList(r, foldable) {
   return `<details id="rules"${L.rulesOpen ? " open" : ""}><summary>${title}</summary>${phrase}<ul>${items}</ul></details>`;
 }
 
-function bubble(m) {
+// foto, video, audio u otro archivo dentro de un mensaje
+function fileView(f, small) {
+  if (!f) return "";
+  const u = esc(f.url);
+  if (f.kind === "image") return `<a href="${u}" target="_blank" rel="noopener" class="photo"><img${small ? ' class="thumb"' : ""} src="${u}" alt="Foto del Revisor" loading="lazy"></a>`;
+  if (f.kind === "video") return `<video class="media${small ? " thumb" : ""}" src="${u}" controls playsinline preload="metadata"></video>`;
+  if (f.kind === "audio") return `<audio class="media" src="${u}" controls preload="metadata"></audio>`;
+  return `<a class="filelink" href="${u}" target="_blank" rel="noopener">${clipIcon}<span>${esc(f.name || "Archivo")}</span></a>`;
+}
+function bubble(m, extra = "") {
   const name = m.mine ? "TÚ" : m.role === "profesor" ? "USUARIO (PROFESOR)" : (RN[m.role] || m.role).toUpperCase() + " · " + m.nick;
-  const photo = m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener" class="photo"><img src="${esc(m.img)}" alt="Foto del Revisor" loading="lazy"></a>` : "";
-  return `<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${esc(name)}</span>${photo}${m.text ? (m.cut ? "…" : "") + esc(m.text) : ""}</div>`;
+  return `<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${esc(name)}</span>${fileView(m.file)}${m.text ? (m.cut ? "…" : "") + esc(m.text) : ""}${extra}</div>`;
 }
 
 // destino actual del interruptor (el primero si no se ha escogido)
@@ -211,10 +220,13 @@ function vChat(v) {
   const r = v.you.role, c = v.context, u = v.usuario, live = !!(u && u.live), pct = Math.min(100, (c.used / c.limit) * 100);
   const now = Date.now(), forgot = c.forgot && now - c.forgot.at < 3000;
   let last = null, html = "";
+  // el Modelo puede reenviarle al Usuario los archivos que le manda el Revisor
+  const canFwd = !!u && !v.paused && !L.sending && (live || !(u.queue || secsTo(u.coolUntil) > 0));
+  const fwd = (m) => (u && m.ch === "R" && m.file ? `<button type="button" class="btn sm fwd" data-act="forward" data-id="${m.id}"${canFwd ? "" : " disabled"}>${live ? "Reenviar al Usuario" : "Reenviar al Usuario (hace fila)"}</button>` : "");
   v.msgs.forEach((m) => {
     if (m.ch !== last) { html += `<div class="sep">${m.ch} · ${esc(CHN[m.ch] || "").toUpperCase()}</div>`; last = m.ch; }
     const old = m.id === c.oldestId && pct > 85;
-    html += `<div data-id="${m.id}" class="msg${m.mine ? " me" : ""}${old ? " old" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}${bubble(m)}</div>`;
+    html += `<div data-id="${m.id}" class="msg${m.mine ? " me" : ""}${old ? " old" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}${bubble(m, fwd(m))}</div>`;
   });
   if (!v.msgs.length) html = `<div class="empty">${r === "modelo" ? '<div class="spin" style="width:40px;height:40px"></div>Esperando el encargo del Usuario…' : r === "revisor" ? "Mira lo que hace el Arnés y descríbeselo al Modelo." : "Aún no te llega nada. Espera tu mensaje o juega al lado."}</div>`;
   // mensaje del Modelo esperando en la cola del Usuario (todavía no ocupa contexto)
@@ -231,8 +243,8 @@ function vChat(v) {
     compose = `${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
         ${Object.entries(dests).map(([k, d]) => `<button type="button" class="seg${to === k ? " on" : ""}" aria-pressed="${to === k}" data-act="to" data-to="${k}">${d[1]}</button>`).join("")}</div>
       <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${hold}" aria-label="Mensaje para ${name}"${off}>
-        ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto a ${name}" title="Mandar foto">${camIcon}</label>
-        <input type="file" id="photo" accept="image/*" capture="environment" hidden${dis}>` : ""}
+        ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto, video, audio o archivo a ${name}" title="Mandar foto, video, audio o archivo">${camIcon}</label>
+        <input type="file" id="photo" accept="image/*,video/*,audio/*,application/pdf" hidden${dis}>` : ""}
         <button class="btn" style="background:${to === "usuario" ? RC.profesor : RC[r]};color:${to === "usuario" ? "#000" : RTX[r]}"${off}>${to === "usuario" && !live ? "HACER FILA" : "ENVIAR"}</button></form>`;
   } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>`;
   const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}: ${esc(PHRASE[r])}.</b> ${HINT[r]}</p></div>` : "";
@@ -244,20 +256,22 @@ function vChat(v) {
       <div class="slot-forgot">${forgot ? `<div class="forgot">Se olvidaron ${c.forgot.n} caracteres</div>` : ""}</div>
       <div class="msgs" id="msgs">${html}</div>${compose}
       ${v.paused ? `<div class="overlay"><span class="dots" style="font-size:44px">PAUSA</span><span class="muted">El admin pausó la actividad</span></div>` : ""}
-    </section><div class="side"><div class="card rules">${rulesList(r, true)}</div>${v.question ? vMini(v) : ""}</div></div>`;
+    </section><div class="side"><div class="card rules">${rulesList(r, true)}</div>${v.quizMax ? vMini(v) : ""}</div></div>`;
 }
 
 function vMini(v) {
   const q = v.question, a = L.answer && Date.now() - L.answer.at < 2600 ? L.answer : null;
-  const opts = a ? a.options : q.options;
-  return `<aside class="card mini" aria-label="Minijuego"><span class="flag">MINIJUEGO</span>
-    <div class="q">${esc(a ? a.text : q.text)}</div>
-    ${opts.map((o) => {
+  const foot = `<p class="muted" style="margin:4px 0 0;font-size:12.5px;line-height:1.45">Máximo ${v.quizMax} preguntas por turno. Cada acierto le da <b style="color:var(--y)">+${v.quizBonus} caracteres</b> a tu equipo.</p>`;
+  if (!q && !a) return `<aside class="card mini" aria-label="Minijuego"><span class="flag">MINIJUEGO</span><div class="q">Ya respondiste las ${v.quizMax} preguntas de este turno.</div><p class="muted" style="margin:0;font-size:13px">Después de la rotación hay más.</p></aside>`;
+  const shown = a || q;
+  return `<aside class="card mini" aria-label="Minijuego"><span class="flag">MINIJUEGO · ${shown.n} DE ${v.quizMax}</span>
+    <div class="q">${esc(shown.text)}</div>
+    ${shown.options.map((o) => {
       let cls = "";
-      if (a) { if (o.k === 1) cls = " ok"; else if (o.k === a.picked) cls = " bad"; }
-      return `<button class="opt${cls}" data-act="answer" data-q="${q.id}" data-k="${o.k}"${a ? " disabled" : ""}>${esc(o.text)}</button>`;
+      if (a) { if (o.k === 0) cls = " ok"; else if (o.k === a.picked) cls = " bad"; }
+      return `<button class="opt${cls}" data-act="answer" data-q="${shown.id}" data-k="${o.k}"${a ? " disabled" : ""}>${esc(o.text)}</button>`;
     }).join("")}
-    <p class="muted" style="margin:4px 0 0;font-size:12.5px;line-height:1.45">Cada acierto le da <b style="color:var(--y)">+40 caracteres</b> a tu vecino de mesa${v.neighborPc ? ` (PC ${v.neighborPc})` : ""}, nunca a ti.</p></aside>`;
+    ${foot}</aside>`;
 }
 
 function vRotate(v) {
@@ -319,7 +333,7 @@ function teamCard(v, tm, t, live) {
   const slots = ROLES.map((r) => { const d = devs.find((x) => x.role === r);
     return `<div class="slot"><span class="dot" style="background:${RC[r]}"></span>${d ? esc(d.nick || "—") : "<span class='muted'>vacío</span>"}<span class="pc">${RN[r]}${d ? " · PC " + d.pc : ""}</span></div>`; }).join("");
   const feed = live ? `${ctxBar(tm.by || {}, tm.limit)}${ctxLegend(tm.by || {})}
-    <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.img ? "[foto] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
+    <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.file ? "[archivo] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
   // estado del Modelo de este equipo frente al Usuario
   const talking = live && v.live && v.live.team === t, qi = live ? v.queue.findIndex((q) => q.team === t) : -1, cool = live ? secsTo(tm.coolUntil) : 0;
   const state = talking ? `<span class="pill" style="background:var(--y);color:#000">CONVERSANDO CONTIGO</span>`
@@ -395,13 +409,13 @@ function vAdmin(v) {
 function vUsuario(v) {
   const chat = (t) => {
     const msgs = v.teams[t].msgs.filter((m) => m.ch === "U");
-    return msgs.map((m) => `<div data-id="${m.id}" class="msg${m.role === "profesor" ? " me" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${m.role === "profesor" ? "TÚ" : "MODELO · " + esc(m.nick)}</span>${m.cut ? "…" : ""}${esc(m.text)}</div></div>`).join("")
+    return msgs.map((m) => `<div data-id="${m.id}" class="msg${m.role === "profesor" ? " me" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${m.role === "profesor" ? "TÚ" : "MODELO · " + esc(m.nick)}</span>${fileView(m.file)}${m.cut ? "…" : ""}${esc(m.text)}</div></div>`).join("")
       || "<div class='empty'>Sin mensajes todavía.</div>";
   };
   const queue = v.queue.length ? `<ol class="queue">${v.queue.map((q, i) => {
     const s = secsTo(q.readyAt);
     const st = s > 0 ? `espera mínima ${mmss(s)}` : i === 0 && v.live ? "listo · cuando termines" : i === 0 ? "pasa ya" : "listo · espera su turno";
-    return `<li><b>Equipo ${q.team + 1}</b> <span class="muted">${esc(q.nick)}</span> <span class="qst">${st}</span><span class="qtx">${esc(q.text)}</span></li>`;
+    return `<li><b>Equipo ${q.team + 1}</b> <span class="muted">${esc(q.nick)}</span> <span class="qst">${st}</span><span class="qtx">${q.file ? "[archivo] " : ""}${esc(q.text)}</span></li>`;
   }).join("")}</ol>` : `<p class="muted" style="margin:0;font-size:13px">Ningún Modelo esperando.</p>`;
   const qcard = `<div class="card qcard"><span class="ctlt">COLA DE MODELOS (${v.queue.length})</span>${queue}
     <p class="muted" style="margin:0;font-size:12px">Cada Modelo espera al menos ${v.cfg.queueSec ? mmss(v.cfg.queueSec) : "0:00"} y a que termines con los que llegaron antes. Después de hablar contigo espera ${v.cfg.coolSec ? mmss(v.cfg.coolSec) : "0:00"} para volver a escribirte. Si nadie escribe en ${mmss(v.cfg.liveSec)}, la conversación se cierra sola.</p></div>`;
@@ -418,7 +432,7 @@ function vUsuario(v) {
 function vTeamModal(v, t) {
   const tm = v.teams[t];
   return `<div class="modal" data-act="closeTeam"><div class="card" data-stop="1" role="dialog" aria-label="Canales del equipo ${t + 1}"><div class="admhead"><h2 class="h1" style="font-size:28px">EQUIPO ${t + 1}</h2><button class="btn dark" data-act="closeTeam">Cerrar</button></div>
-    <div class="chgrid">${["U", "C", "R"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(m.img)}" alt="Foto del Revisor"></a>` : ""}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
+    <div class="chgrid">${["U", "C", "R"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${fileView(m.file, true)}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
       ${c === "U" && !(v.live && v.live.team === t) ? `<form class="replyf" data-submit="reply" data-t="${t}"><input class="input" id="replyTeam" maxlength="280" autocomplete="off" placeholder="Escribirle al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn sm" style="background:var(--y)">Enviar</button></form>` : ""}</div>`).join("")}</div></div></div>`;
 }
 
@@ -507,9 +521,16 @@ document.addEventListener("click", async (e) => {
     const k = +el.dataset.k, q = L.view.question;
     const r = await emit("answer", { qid: +el.dataset.q, k });
     if (r.ok) {
-      L.answer = { at: Date.now(), picked: k, text: q.text, options: q.options };
-      toast(r.correct ? (r.toPc ? `¡Correcto! +${r.bonus} caracteres para tu vecino del PC ${r.toPc}.` : `¡Correcto! +${r.bonus} caracteres para el equipo vecino.`) : `Casi. La respuesta era: ${r.correctText}`);
+      L.answer = { at: Date.now(), picked: k, ...q };
+      toast(r.correct ? `¡Correcto! +${r.bonus} caracteres para tu equipo.` : `Casi. La respuesta era: ${r.correctText}`);
     }
+    return;
+  }
+  if (act === "forward") {
+    // si el Modelo está escribiéndole al Usuario, ese texto viaja con el archivo
+    const inp = $("#msg"), caption = curTo(L.view) === "usuario" && inp ? inp.value.trim() : "";
+    const r = await emit("forward", { id: +id, text: caption });
+    if (r.ok) { if (caption) inp.value = ""; toast(r.queued ? `Archivo en la cola del Usuario: puesto ${r.pos}.` : "Archivo reenviado al Usuario."); }
     return;
   }
   if (act === "ready") { await emit("ready", { personId: +id }); return; }
@@ -535,34 +556,56 @@ function shrinkPhoto(file) {
       c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      let q = 0.75, data = c.toDataURL("image/jpeg", q);
-      while (data.length > 1400000 && q > 0.3) { q -= 0.15; data = c.toDataURL("image/jpeg", q); }
-      resolve(data);
+      const out = (q) => c.toBlob((b) => (b && b.size > 1000000 && q > 0.3 ? out(q - 0.15) : b ? resolve(b) : reject(new Error("No se pudo leer la foto."))), "image/jpeg", q);
+      out(0.75);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("No se pudo leer la foto.")); };
     img.src = url;
   });
 }
-async function sendPhoto(file) {
+const MAX_FILE = 80 * 1024 * 1024;
+// sube el archivo al servidor (con avance) y devuelve su id
+function uploadFile(blob, type, name) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/subir");
+    x.setRequestHeader("Content-Type", type);
+    x.setRequestHeader("X-Device", deviceId());
+    x.setRequestHeader("X-Name", encodeURIComponent(name || ""));
+    x.upload.onprogress = (e) => { if (e.lengthComputable && e.total > 300000) toast(`Subiendo… ${Math.round((e.loaded / e.total) * 100)}%`); };
+    x.onload = () => { let r = {}; try { r = JSON.parse(x.responseText); } catch (_) {} if (r.id) resolve(r.id); else reject(new Error(r.error || "No se pudo subir el archivo.")); };
+    x.onerror = () => reject(new Error("No se pudo subir el archivo. Revisa la conexión."));
+    x.send(blob);
+  });
+}
+// El Revisor manda una foto, video, audio u otro archivo (con el texto escrito como pie)
+async function sendFile(file) {
   L.picking = false;
   if (!file) { render(); return; }
-  L.sending = true; toast("Enviando foto…");
+  L.sending = true; render(); toast("Enviando archivo…");
   try {
-    const image = await shrinkPhoto(file);
+    let blob = file, type = file.type || "application/octet-stream";
+    // las fotos se achican; los GIF quedan como están para no perder la animación
+    if (/^image\/(jpeg|png|webp|heic|heif)$/.test(type)) { blob = await shrinkPhoto(file); type = "image/jpeg"; }
+    if (blob.size > MAX_FILE) throw new Error("El archivo es muy grande (máximo 80 MB).");
+    const fileId = await uploadFile(blob, type, file.name);
     const caption = ($("#msg") && $("#msg").value.trim()) || "";
     const to = curTo(L.view);
-    const r = await emit("send", { text: caption, to, image });
-    if (r.ok) { if ($("#msg")) $("#msg").value = ""; toast(`Foto enviada a ${DEST.revisor[to][1]}.`); }
+    const r = await emit("send", { text: caption, to, file: fileId });
+    if (r.ok) { if ($("#msg")) $("#msg").value = ""; toast(`Archivo enviado al ${DEST.revisor[to][1]}.`); }
   } catch (err) { toast(err.message); }
+  const inp = $("#photo"); if (inp) inp.value = "";
   L.sending = false; render();
 }
 document.addEventListener("toggle", (e) => { if (e.target.id === "rules") L.rulesOpen = e.target.open; }, true);
 // si se cierra el selector de fotos sin escoger, seguir dibujando
 window.addEventListener("focus", () => setTimeout(() => { if (L.picking && !($("#photo") && $("#photo").files.length)) { L.picking = false; render(); } }, 800));
 document.addEventListener("change", (e) => {
-  if (e.target.id === "photo") { sendPhoto(e.target.files && e.target.files[0]); return; }
+  if (e.target.id === "photo") { sendFile(e.target.files && e.target.files[0]); return; }
   const k = e.target.dataset.change;
   if (!k) return;
+  // soltar el menú para que el panel se redibuje con el valor nuevo al instante
+  if (e.target.tagName === "SELECT") e.target.blur();
   const id = e.target.dataset.id;
   if (k === "role") emit("admin:assign", { deviceId: id, role: e.target.value });
   if (k === "team") emit("admin:assign", { deviceId: id, team: e.target.value === "" ? null : +e.target.value });
