@@ -2,37 +2,41 @@
 // La misma página sirve a los PCs/iPads de la sala (/) y al panel del admin (/admin).
 // El servidor manda una "vista" ya filtrada por rol; aquí solo se dibuja y se envían acciones.
 
-const ROLES = ["thinking", "modelo", "arnes", "revisor"];
-const RN = { thinking: "Thinking", modelo: "Modelo", arnes: "Arnés", revisor: "Revisor", profesor: "Usuario" };
-const RC = { thinking: "var(--t)", modelo: "var(--m)", arnes: "var(--a)", revisor: "var(--r)", profesor: "var(--y)" };
-const RHEX = { thinking: "#007F92", modelo: "#D32985", arnes: "#9A6400", revisor: "#0051C6", profesor: "#6E6800" };
-const RTX = { thinking: "#000", modelo: "#fff", arnes: "#000", revisor: "#fff", profesor: "#000" };
-const ARTICLE = { thinking: "THINKING", modelo: "EL MODELO", arnes: "EL ARNÉS", revisor: "EL REVISOR" };
-const CHN = { A: "Usuario → Thinking", B: "Thinking → Modelo", C: "Modelo → Arnés", D: "Revisor → Thinking", E: "Revisor ↔ Usuario" };
-const PLACE = { B: "Pregúntale al Modelo…", C: "Órdenes para el Arnés…", D: "Reporte para Thinking…", E: "Pregunta o confirma con el Usuario…" };
+const ROLES = ["modelo", "arnes", "revisor"];
+const RN = { modelo: "Modelo", arnes: "Arnés", revisor: "Revisor", profesor: "Usuario" };
+const RC = { modelo: "var(--m)", arnes: "var(--a)", revisor: "var(--r)", profesor: "var(--y)" };
+const RHEX = { modelo: "#D32985", arnes: "#9A6400", revisor: "#0051C6", profesor: "#6E6800" };
+const RTX = { modelo: "#fff", arnes: "#000", revisor: "#fff", profesor: "#000" };
+const ARTICLE = { modelo: "EL MODELO", arnes: "EL ARNÉS", revisor: "EL REVISOR" };
+// La frase que define cada rol
+const PHRASE = { modelo: "Piensa", arnes: "Ejecuta lo que diga el Modelo", revisor: "Describe las acciones del Arnés" };
+const CHN = { U: "Usuario ↔ Modelo", C: "Modelo → Arnés", R: "Revisor → Modelo", H: "Revisor → Arnés" };
+// a quién puede escribir cada rol: destino → [canal, nombre, ayuda del campo]
+const DEST = {
+  modelo: { arnes: ["C", "Arnés", "Órdenes para el Arnés…"], usuario: ["U", "Usuario", "Escríbele al Usuario…"] },
+  revisor: { modelo: ["R", "Modelo", "Retroalimentación para el Modelo…"], arnes: ["H", "Arnés", "Actualiza lo que hace el Arnés…"] },
+};
+// componentes que llenan el contexto, en el orden de la barra
+const PARTS = ["profesor", "modelo", "revisor"];
 // Reglas que cada rol ve siempre a un lado del chat
 const RULES = {
-  thinking: [
-    "Piensas el plan y se lo explicas al Modelo.",
-    "Todo lo que escribes sale como pregunta: el sistema le agrega ¿ ? automáticamente.",
-    "Recibes el prompt del Usuario y los reportes y fotos del Revisor.",
-    "No hablas con el Arnés y no tocas los materiales.",
-  ],
   modelo: [
-    "Solo escribes órdenes al Arnés para que las haga físicamente.",
-    "No ves el prompt del Usuario: solo lo que te pregunta Thinking.",
-    "No tocas los materiales ni le dices al Arnés cómo pensar: solo qué hacer.",
+    "Piensas el plan. Eres el único que habla con el Usuario.",
+    "Para escribirle al Usuario entras a una cola y esperas tu turno. Cuando te atiende, conversan al instante.",
+    "Después de cada conversación con el Usuario debes esperar un rato antes de volver a escribirle.",
+    "Le das órdenes al Arnés y recibes la retroalimentación del Revisor.",
+    "No le escribes al Revisor.",
   ],
   arnes: [
-    "Eres el ejecutor: solo haces cosas físicas con los materiales.",
-    "Haces exactamente lo que ordena el Modelo, nada más.",
-    "No escribes ni hablas con nadie.",
+    "Eres el ejecutor: haces con los materiales lo que diga el Modelo.",
+    "Recibes las órdenes del Modelo y las actualizaciones del Revisor.",
+    "No escribes ni hablas con el Usuario.",
   ],
   revisor: [
-    "Observas lo que hace el Arnés y se lo reportas a Thinking.",
-    "Puedes mandarle fotos del avance a Thinking.",
-    "Si necesitas confirmar algo con el Usuario (profesor), cambia el interruptor a Usuario.",
-    "No tocas los materiales ni le das órdenes al Arnés.",
+    "Describes las acciones del Arnés: qué hace y cómo va.",
+    "Retroalimentas al Modelo con reportes y fotos del avance.",
+    "Actualizas las acciones del Arnés cuando hay que corregir algo.",
+    "No hablas con el Usuario ni tocas los materiales.",
   ],
 };
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
@@ -40,10 +44,9 @@ const credits = () => `<footer class="credits">Creado por ${AUTHORS.map(esc).joi
 const RULE_ALL ="Prohibido usar internet, el celular o buscar información: el agente solo sabe lo que está en el chat.";
 const camIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="14" r="3.5"/></svg>`;
 const HINT = {
-  thinking: "Recibes el prompt del profesor y el feedback del Revisor. Piensa el plan y escríbeselo al Modelo. No hablas con el Arnés.",
-  modelo: "Recibes el razonamiento de Thinking y lo conviertes en instrucciones claras y cortas para el Arnés. Nunca ves el prompt original.",
-  arnes: "Solo lees las instrucciones del Modelo y construyes con las manos. No puedes escribir: haz exactamente lo que dice.",
-  revisor: "Lees lo que el Modelo le pide al Arnés y miras el puente. Escríbele feedback a Thinking para cerrar el ciclo.",
+  modelo: "Piensa. Recibes el encargo del Usuario y la retroalimentación del Revisor, y lo conviertes en órdenes claras para el Arnés. Para hablar con el Usuario haces fila.",
+  arnes: "Ejecuta lo que diga el Modelo. Lees sus órdenes y las actualizaciones del Revisor, y construyes con las manos. No escribes.",
+  revisor: "Describe las acciones del Arnés. Miras lo que construye, retroalimentas al Modelo y actualizas al Arnés cuando algo hay que corregir.",
 };
 
 const IS_ADMIN = location.pathname.replace(/\/+$/, "") === "/admin";
@@ -66,7 +69,9 @@ function deviceId() {
 }
 
 const L = { view: null, connected: false, err: "", toast: null, answer: null, adminTeam: null, confirm: null, hintUntil: 0, lastRole: null, seen: new Set(), lastHtml: "", firstPaint: true,
-  revTo: "thinking", rulesOpen: true, picking: false, sending: false, waiting: new Set() };
+  to: null, rulesOpen: true, picking: false, sending: false, skew: 0 };
+// segundos que faltan para un instante del reloj del servidor
+const secsTo = (at) => Math.max(0, Math.ceil((at - (Date.now() + L.skew)) / 1000));
 const socket = io({ reconnectionDelay: 800, reconnectionDelayMax: 4000 });
 
 function toast(text) { L.toast = { text, until: Date.now() + 3200 }; render(); }
@@ -90,13 +95,15 @@ socket.on("disconnect", () => { L.connected = false; render(); });
 socket.on("view", (v) => {
   const prev = L.view;
   L.view = v;
+  if (v.now) L.skew = v.now - Date.now();
   // si el rol de este PC cambió (rotación), mostrar la pista del nuevo rol unos segundos
-  if (v.kind === "device" && v.you && prev && prev.you && prev.phase === "rotate" && v.phase === "activity") { L.hintUntil = Date.now() + 10000; L.rulesOpen = true; L.revTo = "thinking"; }
-  // admin: avisar cuando un Revisor escribe y espera respuesta
-  if (v.kind === "admin") {
-    v.teams.forEach((tm, t) => { if (tm.waiting && !L.waiting.has(t)) toast(`El Revisor del equipo ${t + 1} te escribió.`); });
-    L.waiting = new Set(v.teams.map((tm, t) => (tm.waiting ? t : -1)).filter((t) => t >= 0));
-  }
+  if (v.kind === "device" && v.you && prev && prev.you && prev.phase === "rotate" && v.phase === "activity") { L.hintUntil = Date.now() + 10000; L.rulesOpen = true; L.to = null; }
+  // Modelo: avisar cuando el Usuario lo empieza a atender, y escribirle a él por defecto
+  const wasLive = !!(prev && prev.usuario && prev.usuario.live), isLive = !!(v.usuario && v.usuario.live);
+  if (isLive && !wasLive) { L.to = "usuario"; toast("¡El Usuario te está atendiendo! Los mensajes llegan al instante."); }
+  if (!isLive && wasLive) { L.to = null; toast("El Usuario terminó la conversación."); }
+  // admin: avisar cuando abre una conversación con un Modelo
+  if (v.kind === "admin" && v.live && !(prev && prev.live && prev.live.team === v.live.team)) toast(`El Modelo del equipo ${v.live.team + 1} te escribió.`);
   render();
 });
 // el admin liberó este iPad: se olvida su puesto y vuelve a la pantalla de inicio
@@ -110,6 +117,12 @@ socket.on("released", () => {
 // ---------- Piezas ----------
 const bean = (role, cls = "") => `<div class="bean ${cls}" style="background:${RC[role]}" aria-hidden="true"><i></i></div>`;
 const rolePill = (role, txt) => `<span class="pill" style="background:${RC[role]};color:${RTX[role]}">${esc(txt || RN[role].toUpperCase())}</span>`;
+// barra de contexto partida por colores: cuánto ocupa cada componente
+function ctxBar(by, limit, cls = "") {
+  const segs = PARTS.filter((p) => by[p]).map((p) => `<span style="width:${Math.min(100, (by[p] / limit) * 100)}%;background:${RC[p]}" title="${RN[p]}: ${by[p]}"></span>`).join("");
+  return `<div class="bar ctx ${cls}" role="img" aria-label="${PARTS.map((p) => `${RN[p]} ${by[p] || 0}`).join(", ")} de ${limit} caracteres">${segs}</div>`;
+}
+const ctxLegend = (by) => `<div class="legend">${PARTS.map((p) => `<span><i style="background:${RC[p]}"></i>${RN[p]} <b>${by[p] || 0}</b></span>`).join("")}</div>`;
 const logos = () => `<img class="logo-crea" src="/assets/crea.png" alt="CREA"><img class="logo-ua" src="/assets/uniandes-blanco.png" alt="Universidad de los Andes, Facultad de Ingeniería">`;
 function topbar(extra = "") {
   return `<div class="topbar"><div class="grp"><img class="logo-crea" src="/assets/crea.png" alt="CREA">${extra}</div>
@@ -122,7 +135,7 @@ function vLanding() {
   return `<div class="landing">
   <div class="top anim">${logos()}</div>
   <div class="center">
-    <div class="rings anim" style="animation-delay:.05s"><span class="ring"><i style="background:var(--t)"></i></span><span class="ring"><i style="background:var(--m)"></i></span><span class="ring"><i style="background:var(--a)"></i></span><span class="ring"><i style="background:var(--r)"></i></span><span class="tp">4 personas · 1 agente</span></div>
+    <div class="rings anim" style="animation-delay:.05s"><span class="ring"><i style="background:var(--m)"></i></span><span class="ring"><i style="background:var(--a)"></i></span><span class="ring"><i style="background:var(--r)"></i></span><span class="tp">3 personas · 1 agente</span></div>
     <h1 class="lockup anim" style="animation-delay:.12s" aria-label="Sé una IA por un día"><span class="lines"><span class="dots">SÉ UNA</span><span class="dots">POR UN D-</span></span><span class="dots ia">IA</span></h1>
     <form class="joinbox anim" style="animation-delay:.3s" data-submit="noop">
       <label class="field"><span>TU NICKNAME</span><input class="input" id="nick" maxlength="16" autocomplete="off" autocapitalize="off" placeholder="robotina_42"></label>
@@ -147,6 +160,7 @@ function vWaiting(v) {
   return `${topbar(`<span class="muted" style="font-size:13px">Sesión ${esc(v.code)}</span>`)}<div class="stage">
     <span class="muted" style="font-size:12px;letter-spacing:.3em;font-weight:600">ESTE ES EL PC ${v.you.pc}${v.you.nick ? " · " + esc(v.you.nick) : ""}</span>
     ${rolePill(r, "ERES " + ARTICLE[r])}
+    <div class="phrase" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</div>
     <div class="hintcard anim">${bean(r, "lg")}<div><b style="font-size:11px;letter-spacing:.14em;color:${RHEX[r]}">PISTA</b><p style="margin:4px 0 0;font-size:15px;line-height:1.45">${HINT[r]}</p></div></div>
     <div class="card rules" style="width:min(560px,100%);text-align:left">${rulesList(r, false)}</div>
     <div class="spin" role="img" aria-label="Cargando"></div>
@@ -158,47 +172,67 @@ function vWaiting(v) {
 function rulesList(r, foldable) {
   const items = RULES[r].map((x) => `<li>${esc(x)}</li>`).join("") + `<li class="all">${esc(RULE_ALL)}</li>`;
   const title = `<span class="rt" style="color:${RC[r]}">REGLAS DE TU ROL · ${RN[r].toUpperCase()}${r === "arnes" ? " (EJECUTOR)" : ""}</span>`;
-  if (!foldable) return `${title}<ul>${items}</ul>`;
-  return `<details id="rules"${L.rulesOpen ? " open" : ""}><summary>${title}</summary><ul>${items}</ul></details>`;
+  const phrase = `<p class="rphrase" style="border-color:${RC[r]}">${esc(RN[r])}: <b>${esc(PHRASE[r])}</b></p>`;
+  if (!foldable) return `${title}${phrase}<ul>${items}</ul>`;
+  return `<details id="rules"${L.rulesOpen ? " open" : ""}><summary>${title}</summary>${phrase}<ul>${items}</ul></details>`;
 }
 
 function bubble(m) {
-  const name = m.mine ? "TÚ" : m.role === "profesor" ? "USUARIO (PROFESOR)" : RN[m.role].toUpperCase() + " · " + m.nick;
+  const name = m.mine ? "TÚ" : m.role === "profesor" ? "USUARIO (PROFESOR)" : (RN[m.role] || m.role).toUpperCase() + " · " + m.nick;
   const photo = m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener" class="photo"><img src="${esc(m.img)}" alt="Foto del Revisor" loading="lazy"></a>` : "";
   return `<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${esc(name)}</span>${photo}${m.text ? (m.cut ? "…" : "") + esc(m.text) : ""}</div>`;
 }
 
+// destino actual del interruptor (el primero si no se ha escogido)
+function curTo(v) {
+  const keys = Object.keys(DEST[v.you.role] || {});
+  return keys.includes(L.to) ? L.to : keys[0];
+}
+// estado del Modelo frente al Usuario: conversación abierta, en cola, enfriamiento o libre
+function usuarioStatus(u) {
+  if (u.live) return `<div class="ustat live"><b class="t">EN CONVERSACIÓN CON EL USUARIO</b>Los mensajes llegan al instante. Se cierra sola en ${mmss(secsTo(u.liveEndsAt))} si nadie escribe.</div>`;
+  if (u.queue) {
+    const s = secsTo(u.queue.readyAt), n = u.queue.ahead;
+    const parts = [s > 0 ? `espera mínima ${mmss(s)}` : "", n ? `${n} ${n === 1 ? "equipo" : "equipos"} antes que tú` : ""].filter(Boolean);
+    return `<div class="ustat queue"><b class="t">EN LA COLA DEL USUARIO · PUESTO ${u.queue.pos}</b>${parts.join(" · ") || "Ya casi te atiende."}</div>`;
+  }
+  const cool = secsTo(u.coolUntil);
+  if (cool > 0) return `<div class="ustat cool">Podrás volver a escribirle al Usuario en <b>${mmss(cool)}</b></div>`;
+  return `<div class="ustat">Para hablar con el Usuario entras a la cola: espera mínima ${mmss(u.queueSec)}${u.waiting ? ` · ${u.waiting} en la cola` : ""}</div>`;
+}
+
 function vChat(v) {
-  const r = v.you.role, c = v.context, pct = Math.min(100, (c.used / c.limit) * 100);
+  const r = v.you.role, c = v.context, u = v.usuario, live = !!(u && u.live), pct = Math.min(100, (c.used / c.limit) * 100);
   const now = Date.now(), forgot = c.forgot && now - c.forgot.at < 3000;
   let last = null, html = "";
   v.msgs.forEach((m) => {
-    if (m.ch !== last) { html += `<div class="sep">${m.ch} · ${esc(CHN[m.ch]).toUpperCase()}</div>`; last = m.ch; }
+    if (m.ch !== last) { html += `<div class="sep">${m.ch} · ${esc(CHN[m.ch] || "").toUpperCase()}</div>`; last = m.ch; }
     const old = m.id === c.oldestId && pct > 85;
     html += `<div data-id="${m.id}" class="msg${m.mine ? " me" : ""}${old ? " old" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}${bubble(m)}</div>`;
   });
-  if (!v.msgs.length) html = `<div class="empty">${r === "thinking" ? '<div class="spin" style="width:40px;height:40px"></div>Esperando el prompt del Usuario…' : "Aún no te llega nada. Espera tu mensaje o juega al lado."}</div>`;
+  if (!v.msgs.length) html = `<div class="empty">${r === "modelo" ? '<div class="spin" style="width:40px;height:40px"></div>Esperando el encargo del Usuario…' : "Aún no te llega nada. Espera tu mensaje o juega al lado."}</div>`;
+  // mensaje del Modelo esperando en la cola del Usuario (todavía no ocupa contexto)
+  if (u && u.queue) html += `<div class="msg me pending">${bean(r)}<div class="bubble"><span class="n" style="color:${RHEX.profesor}">EN COLA PARA EL USUARIO</span>${esc(u.queue.text)}</div></div>`;
   const dis = v.paused || L.sending ? " disabled" : "";
   let compose;
-  if (v.revisor) {
-    // interruptor: a quién le escribe el Revisor
-    const ch = L.revTo === "profesor" ? "E" : "D";
-    compose = `<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">Escribirle a:</span>
-        <button type="button" class="seg${L.revTo === "thinking" ? " on" : ""}" aria-pressed="${L.revTo === "thinking"}" data-act="revTo" data-to="thinking">Thinking</button>
-        <button type="button" class="seg${L.revTo === "profesor" ? " on" : ""}" aria-pressed="${L.revTo === "profesor"}" data-act="revTo" data-to="profesor">Usuario (profesor)</button></div>
-      <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${PLACE[ch]}" aria-label="Mensaje"${dis}>
-        <label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto a ${L.revTo === "profesor" ? "el Usuario" : "Thinking"}" title="Mandar foto">${camIcon}</label>
-        <input type="file" id="photo" accept="image/*" capture="environment" hidden${dis}>
-        <button class="btn" style="background:${RC.revisor};color:#fff"${dis}>ENVIAR</button></form>`;
-  } else if (v.channel) {
-    compose = `${r === "thinking" ? `<div class="qnote">Todo lo que escribas se envía como pregunta: <b>¿…?</b></div>` : ""}
-      <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${PLACE[v.channel]}" aria-label="Mensaje"${dis}><button class="btn" style="background:${RC[r]};color:${RTX[r]}"${dis}>ENVIAR</button></form>`;
-  } else compose = `<div class="ro">SOLO LECTURA · TÚ CONSTRUYES CON LAS MANOS</div>`;
-  const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}.</b> ${HINT[r]}${v.fallback ? " En tu equipo no hay Revisor: también haces su trabajo (reportes, fotos y preguntas al Usuario)." : ""}</p></div>` : "";
+  const dests = DEST[r];
+  if (dests) {
+    const to = curTo(v), [, name, place] = dests[to];
+    const blocked = r === "modelo" && to === "usuario" && !live && (u.queue || secsTo(u.coolUntil) > 0);
+    const off = dis || (blocked ? " disabled" : "");
+    const hold = blocked ? (u.queue ? "Ya estás en la cola del Usuario…" : "Espera para volver a escribirle al Usuario…") : place;
+    compose = `${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">Escribirle a:</span>
+        ${Object.entries(dests).map(([k, d]) => `<button type="button" class="seg${to === k ? " on" : ""}" aria-pressed="${to === k}" data-act="to" data-to="${k}">${d[1]}</button>`).join("")}</div>
+      <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${hold}" aria-label="Mensaje para ${name}"${off}>
+        ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto a ${name}" title="Mandar foto">${camIcon}</label>
+        <input type="file" id="photo" accept="image/*" capture="environment" hidden${dis}>` : ""}
+        <button class="btn" style="background:${to === "usuario" ? RC.profesor : RC[r]};color:${to === "usuario" ? "#000" : RTX[r]}"${off}>${to === "usuario" && !live ? "HACER FILA" : "ENVIAR"}</button></form>`;
+  } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>`;
+  const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}: ${esc(PHRASE[r])}.</b> ${HINT[r]}</p></div>` : "";
   return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">PC ${v.you.pc}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}${hint}
-    <div class="pchead"><span class="muted" style="font-size:13px">${v.fallback ? "Sin Revisor en tu equipo: tú das el feedback." : ""}</span>
-      <div class="hud"><span><b>${c.used}</b> / ${c.limit} CARACTERES${c.bonus ? ` <span class="muted">(base ${c.base})</span>` : ""}</span><div class="bar${forgot ? " flash" : ""}"><span style="width:${pct}%;background:${RC[r]}"></span></div>${c.bonus ? `<span class="bonus">${esc(c.bonusLog)} · total +${c.bonus}</span>` : ""}</div></div>
-    <div class="pcgrid"><section class="card chat" aria-label="Chat">
+    <div class="pchead"><span class="phrase sm" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</span>
+      <div class="hud"><span><b>${c.used}</b> / ${c.limit} CARACTERES${c.bonus ? ` <span class="muted">(base ${c.base})</span>` : ""}</span>${ctxBar(c.by || {}, c.limit, forgot ? "flash" : "")}${ctxLegend(c.by || {})}${c.bonus ? `<span class="bonus">${esc(c.bonusLog)} · total +${c.bonus}</span>` : ""}</div></div>
+    <div class="pcgrid${live ? " live" : ""}"><section class="card chat${live ? " live" : ""}" aria-label="Chat">
       ${forgot ? `<div class="forgot">Se olvidaron ${c.forgot.n} caracteres</div>` : ""}
       <div class="msgs" id="msgs">${html}</div>${compose}
       ${v.paused ? `<div class="overlay"><span class="dots" style="font-size:44px">PAUSA</span><span class="muted">El admin pausó la actividad</span></div>` : ""}
@@ -249,6 +283,13 @@ function vLogin() {
     </form></div></div>`;
 }
 
+const QUEUE_OPTS = [0, 15, 30, 60, 90, 120, 180, 300, 600];
+const COOL_OPTS = [0, 15, 30, 60, 90, 120, 180, 300, 600, 900];
+const LIVE_OPTS = [30, 60, 90, 120, 180, 300, 600];
+// opciones en segundos; si el valor actual no está en la lista, se agrega
+function secOpts(list, cur) {
+  return [...new Set([...list, cur])].sort((a, b) => a - b).map((s) => `<option value="${s}"${s === cur ? " selected" : ""}>${s ? mmss(s) + " min" : "Sin espera"}</option>`).join("");
+}
 function teamOptions(v, d) {
   const opts = [`<option value=""${d.team === null ? " selected" : ""}>Sin equipo</option>`];
   v.teams.forEach((_, t) => opts.push(`<option value="${t}"${d.team === t ? " selected" : ""}>Equipo ${t + 1}</option>`));
@@ -269,11 +310,15 @@ function teamCard(v, tm, t, live) {
   const devs = v.devices.filter((d) => d.team === t);
   const slots = ROLES.map((r) => { const d = devs.find((x) => x.role === r);
     return `<div class="slot"><span class="dot" style="background:${RC[r]}"></span>${d ? esc(d.nick || "—") : "<span class='muted'>vacío</span>"}<span class="pc">${RN[r]}${d ? " · PC " + d.pc : ""}</span></div>`; }).join("");
-  const feed = live ? `<div class="bar"><span style="width:${Math.min(100, (tm.used / tm.limit) * 100)}%;background:${tm.used / tm.limit > 0.85 ? "var(--m)" : "var(--t)"}"></span></div>
+  const feed = live ? `${ctxBar(tm.by || {}, tm.limit)}${ctxLegend(tm.by || {})}
     <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.img ? "[foto] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
-  const ask = live && tm.waiting ? `<button class="btn sm askbtn" data-act="openTeam" data-t="${t}">El Revisor te escribió · Responder</button>` : "";
-  return `<div class="card team${live && tm.waiting ? " asking" : ""}"><h3>EQUIPO ${t + 1}${live ? `<span class="muted">${tm.used}/${tm.limit}${tm.bonus ? " (+" + tm.bonus + ")" : ""}</span>` : ""}</h3>
-    ${ask}${feed}${slots}${tm.warnings.map((w) => `<span class="warn">▲ ${esc(w)}</span>`).join("")}
+  // estado del Modelo de este equipo frente al Usuario
+  const talking = live && v.live && v.live.team === t, qi = live ? v.queue.findIndex((q) => q.team === t) : -1, cool = live ? secsTo(tm.coolUntil) : 0;
+  const state = talking ? `<span class="pill" style="background:var(--y);color:#000">CONVERSANDO CONTIGO</span>`
+    : qi >= 0 ? `<span class="pill" style="background:var(--pill);color:#fff">EN COLA · PUESTO ${qi + 1}</span>`
+    : cool > 0 ? `<span class="pill" style="background:var(--pill);color:#c8c8c8">ENFRIAMIENTO ${mmss(cool)}</span>` : "";
+  return `<div class="card team${talking ? " asking" : ""}"><h3>EQUIPO ${t + 1}${live ? `<span class="muted">${tm.used}/${tm.limit}${tm.bonus ? " (+" + tm.bonus + ")" : ""}</span>` : ""}</h3>
+    ${state}${feed}${slots}${tm.warnings.map((w) => `<span class="warn">▲ ${esc(w)}</span>`).join("")}
     ${live ? `<button class="btn dark sm" data-act="openTeam" data-t="${t}">Ver los canales</button>` : ""}</div>`;
 }
 function vAdmin(v) {
@@ -295,6 +340,9 @@ function vAdmin(v) {
         <label class="field"><span>CONTEXTO BASE POR EQUIPO (CARACTERES)</span><input class="input" id="cfgLimit" type="number" min="50" max="5000" step="50" value="${v.cfg.limit}" data-change="cfgLimit"></label>
         <label class="field"><span>AL LLENARSE, SE BORRA…</span><select class="input" data-change="cfgMode"><option value="mensaje"${v.cfg.mode === "mensaje" ? " selected" : ""}>El mensaje más viejo completo</option><option value="recortar"${v.cfg.mode === "recortar" ? " selected" : ""}>Letra por letra (recorta frases)</option></select></label>
         <label class="field"><span>TIEMPO ENTRE ROTACIONES</span><select class="input" data-change="cfgRot">${[60, 120, 180, 300, 420, 600, 900].map((s) => `<option value="${s}"${v.cfg.rotSec === s ? " selected" : ""}>${mmss(s)} min</option>`).join("")}</select></label>
+        <label class="field"><span>COLA: ESPERA MÍNIMA PARA HABLAR CONTIGO</span><select class="input" data-change="cfgQueue">${secOpts(QUEUE_OPTS, v.cfg.queueSec)}</select></label>
+        <label class="field"><span>ENFRIAMIENTO DEL MODELO TRAS HABLAR CONTIGO</span><select class="input" data-change="cfgCool">${secOpts(COOL_OPTS, v.cfg.coolSec)}</select></label>
+        <label class="field"><span>LA CONVERSACIÓN SE CIERRA SOLA TRAS… SIN MENSAJES</span><select class="input" data-change="cfgLive">${secOpts(LIVE_OPTS, v.cfg.liveSec)}</select></label>
       </div>
       <p class="muted" style="margin:0;font-size:13px">El sistema arma los equipos a medida que entran (1 persona por rol). Cambia el rol o el equipo de cualquier PC en la tabla; si el puesto ya está ocupado, se intercambian.</p>
       <div class="teams">${v.teams.map((tm, t) => teamCard(v, tm, t, false)).join("") || "<p class='muted'>Aún no hay equipos.</p>"}</div>
@@ -322,20 +370,48 @@ function vAdmin(v) {
       <button class="btn dark sm" data-act="limit" data-d="-50" aria-label="Quitar 50 caracteres">−50</button>
       <b class="dots" style="font-size:24px;min-width:70px;text-align:center">${v.cfg.limit}</b>
       <button class="btn dark sm" data-act="limit" data-d="50" aria-label="Sumar 50 caracteres">+50</button>
-      <span class="muted" style="font-size:12px">caracteres por equipo (más lo ganado en el minijuego)</span></div></div>`;
+      <span class="muted" style="font-size:12px">caracteres por equipo (más lo ganado en el minijuego)</span></div>
+    <div class="ctlgrp"><span class="ctlt">COLA</span><select class="input sm" data-change="cfgQueue" aria-label="Espera mínima en la cola">${secOpts(QUEUE_OPTS, v.cfg.queueSec)}</select>
+      <span class="ctlt">ENFRIAMIENTO</span><select class="input sm" data-change="cfgCool" aria-label="Enfriamiento del Modelo tras hablar contigo">${secOpts(COOL_OPTS, v.cfg.coolSec)}</select>
+      <span class="ctlt">CIERRE SIN MENSAJES</span><select class="input sm" data-change="cfgLive" aria-label="La conversación se cierra sola tras este tiempo sin mensajes">${secOpts(LIVE_OPTS, v.cfg.liveSec)}</select></div></div>`;
+  const usuario = rot ? "" : vUsuario(v);
   const readyL = rot ? `<div class="card" style="padding:14px"><div class="readyl">${v.rotation.map((x) => `<span class="pill" style="background:${x.ready ? "var(--t)" : "var(--pill)"};color:${x.ready ? "#000" : "#c8c8c8"}">${x.ready ? "✓" : x.online ? "…" : "⚠"} ${esc(x.nick)} → PC ${x.toPc}</span>`).join("")}</div></div>` : "";
-  const bc = rot ? "" : `<form class="card bc" data-submit="prompt"><textarea id="bc" maxlength="600" placeholder="Prompt para los Thinking. Ej: Construyan un puente de pasta que aguante un celular." aria-label="Prompt"></textarea>
+  const bc = rot ? "" : `<form class="card bc" data-submit="prompt"><textarea id="bc" maxlength="600" placeholder="Prompt para los Modelos. Ej: Construyan un puente de pasta que aguante un celular." aria-label="Prompt"></textarea>
     <div class="row"><select class="input" id="bcTarget" style="width:auto" aria-label="Destino"><option value="all">Todos los equipos</option>${v.teams.map((_, t) => `<option value="${t}">Solo equipo ${t + 1}</option>`).join("")}</select><button class="btn" style="background:var(--y)">ENVIAR PROMPT</button></div></form>`;
-  return `<div class="adm">${head(rot ? "ROTANDO" : v.paused ? "EN PAUSA" : "EN VIVO", right)}${readyL}${controls}${bc}
+  return `<div class="adm">${head(rot ? "ROTANDO" : v.paused ? "EN PAUSA" : "EN VIVO", right)}${readyL}${usuario}${controls}${bc}
     <div class="teams">${v.teams.map((tm, t) => teamCard(v, tm, t, true)).join("")}</div>
     <details id="devs" class="card" style="padding:14px"><summary style="cursor:pointer;font-weight:600">Dispositivos (${v.devices.length}) · asignar personas que llegan tarde</summary><div style="margin-top:12px">${devTable(v)}</div></details>
     ${L.adminTeam !== null && v.teams[L.adminTeam] ? vTeamModal(v, L.adminTeam) : ""}</div>`;
 }
+// El Usuario (admin) atiende a un Modelo a la vez: chat amplio de la conversación abierta y la cola
+function vUsuario(v) {
+  const chat = (t) => {
+    const msgs = v.teams[t].msgs.filter((m) => m.ch === "U");
+    return msgs.map((m) => `<div data-id="${m.id}" class="msg${m.role === "profesor" ? " me" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${m.role === "profesor" ? "TÚ" : "MODELO · " + esc(m.nick)}</span>${m.cut ? "…" : ""}${esc(m.text)}</div></div>`).join("")
+      || "<div class='empty'>Sin mensajes todavía.</div>";
+  };
+  const queue = v.queue.length ? `<ol class="queue">${v.queue.map((q, i) => {
+    const s = secsTo(q.readyAt);
+    const st = s > 0 ? `espera mínima ${mmss(s)}` : i === 0 && v.live ? "listo · cuando termines" : i === 0 ? "pasa ya" : "listo · espera su turno";
+    return `<li><b>Equipo ${q.team + 1}</b> <span class="muted">${esc(q.nick)}</span> <span class="qst">${st}</span><span class="qtx">${esc(q.text)}</span></li>`;
+  }).join("")}</ol>` : `<p class="muted" style="margin:0;font-size:13px">Ningún Modelo esperando.</p>`;
+  const qcard = `<div class="card qcard"><span class="ctlt">COLA DE MODELOS (${v.queue.length})</span>${queue}
+    <p class="muted" style="margin:0;font-size:12px">Cada Modelo espera al menos ${v.cfg.queueSec ? mmss(v.cfg.queueSec) : "0:00"} y a que termines con los que llegaron antes. Después de hablar contigo espera ${v.cfg.coolSec ? mmss(v.cfg.coolSec) : "0:00"} para volver a escribirte. Si nadie escribe en ${mmss(v.cfg.liveSec)}, la conversación se cierra sola.</p></div>`;
+  if (!v.live || !v.teams[v.live.team]) return `<div class="usr">${qcard}</div>`;
+  const t = v.live.team;
+  return `<div class="usr"><section class="card livechat" aria-label="Conversación con el Modelo del equipo ${t + 1}">
+      <div class="admhead"><div><h2 class="h1" style="font-size:24px;color:var(--y)">CONVERSANDO CON EL MODELO · EQUIPO ${t + 1}</h2>
+        <span class="muted" style="font-size:12.5px">Se cierra sola en <b style="color:var(--fg)">${mmss(secsTo(v.live.endsAt))}</b> si nadie escribe</span></div>
+        <button class="btn" style="background:var(--m);color:#fff" data-act="endLive">Terminar${v.queue.length ? " y atender al siguiente" : ""}</button></div>
+      <div class="msgs" id="msgs">${chat(t)}</div>
+      <form class="compose" data-submit="reply" data-t="${t}"><input class="input" id="reply" maxlength="280" autocomplete="off" placeholder="Respóndele al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn" style="background:var(--y)">ENVIAR</button></form>
+    </section>${qcard}</div>`;
+}
 function vTeamModal(v, t) {
   const tm = v.teams[t];
   return `<div class="modal" data-act="closeTeam"><div class="card" data-stop="1" role="dialog" aria-label="Canales del equipo ${t + 1}"><div class="admhead"><h2 class="h1" style="font-size:28px">EQUIPO ${t + 1}</h2><button class="btn dark" data-act="closeTeam">Cerrar</button></div>
-    <div class="chgrid">${["E", "A", "B", "C", "D"].map((c) => `<div class="chcol${c === "E" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(m.img)}" alt="Foto del Revisor"></a>` : ""}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
-      ${c === "E" ? `<form class="replyf" data-submit="reply" data-t="${t}"><input class="input" id="reply" maxlength="280" autocomplete="off" placeholder="Responder al Revisor…" aria-label="Respuesta al Revisor"><button class="btn sm" style="background:var(--y)">Responder</button></form>` : ""}</div>`).join("")}</div></div></div>`;
+    <div class="chgrid">${["U", "C", "R", "H"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.img ? `<a href="${esc(m.img)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(m.img)}" alt="Foto del Revisor"></a>` : ""}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
+      ${c === "U" && !(v.live && v.live.team === t) ? `<form class="replyf" data-submit="reply" data-t="${t}"><input class="input" id="replyTeam" maxlength="280" autocomplete="off" placeholder="Escribirle al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn sm" style="background:var(--y)">Enviar</button></form>` : ""}</div>`).join("")}</div></div></div>`;
 }
 
 // ---------- Render ----------
@@ -346,7 +422,7 @@ function render() {
   if (L.picking && Date.now() - L.picking < 120000) return;
   const a = document.activeElement, fid = a && a.id, ss = a && a.selectionStart;
   const keep = {};
-  ["nick", "pw", "msg", "bc", "cfgLimit", "reply"].forEach((id) => { const el = document.getElementById(id); if (el) keep[id] = el.value; });
+  ["nick", "pw", "msg", "bc", "cfgLimit", "reply", "replyTeam"].forEach((id) => { const el = document.getElementById(id); if (el) keep[id] = el.value; });
   const bcT = $("#bcTarget") && $("#bcTarget").value;
   const details = $("#devs") && $("#devs").open;
   const m = $("#msgs"), stick = !m || m.scrollHeight - m.scrollTop - m.clientHeight < 60, prevTop = m ? m.scrollTop : 0;
@@ -394,7 +470,8 @@ document.addEventListener("click", async (e) => {
     if (r.ok) { if (r.reclaimed) toast(`Volviste a tu puesto: PC ${r.pc}.`); fresh(); }
     return;
   }
-  if (act === "revTo") { L.revTo = el.dataset.to; render(); $("#msg") && $("#msg").focus(); return; }
+  if (act === "to") { L.to = el.dataset.to; render(); $("#msg") && !$("#msg").disabled && $("#msg").focus(); return; }
+  if (act === "endLive") { await emit("admin:endLive"); return; }
   if (act === "pick") { L.picking = Date.now(); return; } // abre el selector de fotos (lo hace el <label>)
   if (act === "autoRot") { await emit("admin:config", { autoRot: !(L.view.cfg.autoRot !== false) }); return; }
   if (act === "timer") { await emit("admin:setTimer", { sec: Math.max(5, L.view.timerLeft + Number(el.dataset.d)) }); return; }
@@ -411,7 +488,7 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (act === "ready") { await emit("ready", { personId: +id }); return; }
-  if (act === "start") { const r = await emit("admin:start"); if (r.ok) toast("¡Actividad iniciada! Envía el prompt a los Thinking."); return; }
+  if (act === "start") { const r = await emit("admin:start"); if (r.ok) toast("¡Actividad iniciada! Envía el prompt a los Modelos."); return; }
   if (act === "reshuffle") { const r = await emit("admin:reshuffle"); if (r.ok) toast("Equipos rearmados."); return; }
   if (act === "pause") { await emit("admin:pause"); return; }
   if (act === "plus") { await emit("admin:addTime", { sec: 60 }); return; }
@@ -448,8 +525,9 @@ async function sendPhoto(file) {
   try {
     const image = await shrinkPhoto(file);
     const caption = ($("#msg") && $("#msg").value.trim()) || "";
-    const r = await emit("send", { text: caption, to: L.revTo, image });
-    if (r.ok) { if ($("#msg")) $("#msg").value = ""; toast(`Foto enviada a ${L.revTo === "profesor" ? "el Usuario" : "Thinking"}.`); }
+    const to = curTo(L.view);
+    const r = await emit("send", { text: caption, to, image });
+    if (r.ok) { if ($("#msg")) $("#msg").value = ""; toast(`Foto enviada a ${DEST.revisor[to][1]}.`); }
   } catch (err) { toast(err.message); }
   L.sending = false; render();
 }
@@ -466,6 +544,9 @@ document.addEventListener("change", (e) => {
   if (k === "cfgLimit") emit("admin:config", { limit: +e.target.value });
   if (k === "cfgMode") emit("admin:config", { mode: e.target.value });
   if (k === "cfgRot") emit("admin:config", { rotSec: +e.target.value });
+  if (k === "cfgQueue") emit("admin:config", { queueSec: +e.target.value });
+  if (k === "cfgCool") emit("admin:config", { coolSec: +e.target.value });
+  if (k === "cfgLive") emit("admin:config", { liveSec: +e.target.value });
 });
 document.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -479,16 +560,19 @@ document.addEventListener("submit", async (e) => {
     const inp = $("#msg"), text = (inp.value || "").trim();
     if (!text) return;
     inp.value = "";
-    const r = await emit("send", { text, to: L.view && L.view.revisor ? L.revTo : undefined });
+    const r = await emit("send", { text, to: curTo(L.view) });
     if (!r.ok) inp.value = text;
+    else if (r.queued) toast(`Entraste a la cola del Usuario: puesto ${r.pos}.`);
     $("#msg") && $("#msg").focus();
     return;
   }
   if (k === "reply") {
-    const inp = $("#reply"), text = (inp.value || "").trim();
+    const inp = e.target.querySelector("input"), text = (inp.value || "").trim();
     if (!text) return;
+    inp.value = "";
     const r = await emit("admin:reply", { team: +e.target.dataset.t, text });
-    if (r.ok) { inp.value = ""; toast("Respuesta enviada al Revisor."); }
+    if (!r.ok) inp.value = text;
+    inp.focus();
     return;
   }
   if (k === "prompt") {
@@ -496,7 +580,7 @@ document.addEventListener("submit", async (e) => {
     if (!text) return;
     const target = $("#bcTarget").value;
     const r = await emit("admin:prompt", { text, team: target === "all" ? "all" : +target });
-    if (r.ok) { ta.value = ""; toast(target === "all" ? "Prompt enviado a todos los Thinking." : `Prompt enviado al equipo ${+target + 1}.`); }
+    if (r.ok) { ta.value = ""; toast(target === "all" ? "Prompt enviado a todos los Modelos." : `Prompt enviado al equipo ${+target + 1}.`); }
   }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && L.adminTeam !== null) { L.adminTeam = null; render(); } });

@@ -29,13 +29,14 @@ const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
 
 // ---------- Reglas del juego (ver especificación) ----------
-const ROLES = ["thinking", "modelo", "arnes", "revisor"];
-const CORE = ["thinking", "modelo", "arnes"];
-// Canales: A profesor→Thinking · B Thinking→Modelo · C Modelo→Arnés · D Revisor→Thinking
-//          E Revisor↔Usuario (profesor): el Revisor pide confirmaciones y el profesor responde
-const READ = { thinking: ["A", "B", "D"], modelo: ["B", "C"], arnes: ["C"], revisor: ["C", "D", "E"] };
-const WRITE = { thinking: "B", modelo: "C", arnes: null, revisor: "D" };
-const REVISOR_TO = { thinking: "D", profesor: "E" };
+// Modelo: piensa · Arnés: ejecuta lo que diga el Modelo · Revisor: describe las acciones del Arnés
+const ROLES = ["modelo", "arnes", "revisor"];
+const CORE = ["modelo", "arnes"];
+// Canales: U Usuario (profesor)↔Modelo: el único que habla con el Usuario es el Modelo
+//          C Modelo→Arnés · R Revisor→Modelo (retroalimentación) · H Revisor→Arnés (actualiza sus acciones)
+// El Modelo no le escribe al Revisor y el Arnés solo recibe (del Modelo y del Revisor).
+const READ = { modelo: ["U", "C", "R"], arnes: ["C", "H"], revisor: ["C", "R", "H"] };
+const SEND_TO = { modelo: { arnes: "C", usuario: "U" }, revisor: { modelo: "R", arnes: "H" }, arnes: {} };
 const MAX_TEAMS = 8;
 const MAX_MSG = 280;
 const BONUS = 40;
@@ -50,7 +51,7 @@ const QUESTIONS = [
   ["Si escribes mensajes muy largos…", "Se gasta el contexto más rápido", "El agente siempre piensa mejor", "No pasa nada"],
   ["El arnés de un agente es…", "Lo que ejecuta acciones en el mundo", "Quien escribe el prompt", "Un tipo de memoria"],
   ["¿Qué es un prompt?", "La instrucción que recibe la IA", "La respuesta de la IA", "Un error del sistema"],
-  ["El razonamiento (Thinking) sirve para…", "Planear antes de actuar", "Construir el puente", "Revisar la ortografía"],
+  ["¿Quién es el único que habla con el Usuario?", "El Modelo", "El Arnés", "El Revisor"],
   ["¿Por qué un agente necesita varios roles?", "Para dividir el trabajo y revisarlo", "Para gastar más energía", "No los necesita"],
   ["¿Qué hace una IA con lo que ya no cabe en su contexto?", "Ya no lo puede ver", "Lo resume sola siempre", "Lo manda a otra IA"],
 ];
@@ -63,7 +64,9 @@ function freshState() {
   return {
     code: "CREA-" + Math.floor(100 + Math.random() * 900),
     phase: "lobby", // lobby | activity | rotate | end
-    cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true },
+    // queueSec: espera mínima en la cola para hablar con el Usuario · coolSec: espera tras cada conversación
+    // liveSec: la conversación se cierra sola si pasa este tiempo sin mensajes
+    cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true, queueSec: 60, coolSec: 60, liveSec: 60 },
     images: {}, // imageId -> dataURL (fotos del Revisor)
     devices: {}, // deviceId -> { id, pc, role, team, personId, online }
     persons: {}, // personId -> { id, nick, history: [], deviceId }
@@ -75,9 +78,11 @@ function freshState() {
     rot: null, // { assign: {personId: deviceId}, ready: {personId: true} }
     round: 1,
     questions: {}, // deviceId -> { qi, order }
+    queue: [], // modelos esperando al Usuario: [{ team, text, at, author }]
+    live: null, // conversación abierta entre el Usuario y un Modelo: { team, since, lastAt }
   };
 }
-function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0 }; }
+function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolUntil: 0 }; }
 
 const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const devList = () => Object.values(S.devices);
@@ -87,10 +92,11 @@ const limitOf = (t) => S.cfg.limit + S.teams[t].bonus;
 const costOf = (m) => m.text.length + (m.img ? IMG_COST : 0);
 const usedOf = (t) => S.teams[t].msgs.reduce((n, m) => n + costOf(m), 0);
 const autoRot = () => S.cfg.autoRot !== false;
-// Thinking solo puede preguntar: todo lo que escribe se envía como ¿…?
-function asQuestion(text) {
-  const core = text.replace(/^[¿?\s]+/, "").replace(/[?¿.!\s]+$/, "");
-  return core ? `¿${core}?` : "";
+// consumo del contexto por componente (quién lo escribió), para la barra por colores
+function usedBy(t) {
+  const by = {};
+  S.teams[t].msgs.forEach((m) => (by[m.role] = (by[m.role] || 0) + costOf(m)));
+  return by;
 }
 const hasRevisor = (t) => !!deviceAt(t, "revisor");
 const cleanText = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -116,25 +122,24 @@ function pruneEmptyTeams() {
 function teamWarnings(t) {
   const w = [];
   CORE.forEach((r) => { if (!deviceAt(t, r)) w.push("falta " + r); });
-  if (!hasRevisor(t)) w.push("sin revisor: el Arnés escribe el feedback");
+  if (!hasRevisor(t)) w.push("sin revisor: nadie retroalimenta al Modelo");
   ROLES.forEach((r) => { if (teamDevices(t).filter((d) => d.role === r).length > 1) w.push("dos " + r); });
   return w;
 }
 
 // ---------- Mensajes y ventana de contexto (FIFO) ----------
-// dev = null significa que escribe el profesor (canales A y E)
-function addMsg(t, ch, dev, text, imgData) {
+// quién firma un mensaje; dev = null es el profesor (Usuario)
+function authorOf(dev) {
+  if (!dev) return { role: "profesor", nick: "profesor", pc: null };
+  const person = S.persons[dev.personId];
+  return { role: dev.role, nick: person ? person.nick : "?", pc: dev.pc };
+}
+function addMsg(t, ch, author, text, imgData) {
   const team = S.teams[t];
-  const person = dev && S.persons[dev.personId];
   let img = null;
   if (imgData) { img = crypto.randomBytes(9).toString("hex"); S.images[img] = imgData; }
-  team.msgs.push({
-    id: S.nextId++, ch, text, img,
-    role: dev ? dev.role : "profesor",
-    nick: dev ? (person ? person.nick : "?") : "profesor",
-    pc: dev ? dev.pc : null,
-    at: Date.now(),
-  });
+  team.msgs.push({ id: S.nextId++, ch, text, img, role: author.role, nick: author.nick, pc: author.pc, at: Date.now() });
+  if (ch === "U" && S.live && S.live.team === t) S.live.lastAt = Date.now();
   team.sent++;
   enforce(t);
 }
@@ -158,6 +163,43 @@ function enforce(t) {
     }
   }
   if (removed) { team.forgot = { n: removed, at: Date.now() }; team.forgotTotal += removed; }
+}
+
+// ---------- Cola de los Modelos para hablar con el Usuario ----------
+// El Usuario atiende a un Modelo a la vez. Cada Modelo que le escribe entra a la cola y espera
+// al menos queueSec; además espera a que el Usuario termine con los que llegaron antes.
+// Con modelo 1, 2 y 3 en cola: el 1 espera 1 min, el 2 espera 1 min + lo que tome atender al 1, etc.
+// Dentro de la conversación los mensajes van al instante; al cerrarla, ese Modelo entra en enfriamiento (coolSec).
+// Si el admin no la cierra, se cierra sola tras liveSec sin mensajes, para que la cola no se quede detenida.
+const queuePos = (t) => S.queue.findIndex((q) => q.team === t);
+function serveQueue() {
+  if (S.phase !== "activity" || S.paused || S.live) return false;
+  const head = S.queue[0];
+  if (!head || Date.now() < head.at + S.cfg.queueSec * 1000) return false;
+  S.queue.shift();
+  if (!S.teams[head.team]) return serveQueue();
+  S.live = { team: head.team, since: Date.now(), lastAt: Date.now() };
+  addMsg(head.team, "U", head.author, head.text);
+  return true;
+}
+function endLive() {
+  if (!S.live) return;
+  const team = S.teams[S.live.team];
+  if (team) team.coolUntil = Date.now() + S.cfg.coolSec * 1000;
+  S.live = null;
+  serveQueue();
+}
+const liveEndsAt = () => (S.live ? (S.live.lastAt || S.live.since) + S.cfg.liveSec * 1000 : null);
+function liveTimeout() {
+  if (!S.live || Date.now() < liveEndsAt()) return false;
+  endLive();
+  return true;
+}
+function queueInfo(t) {
+  const i = queuePos(t);
+  if (i < 0) return null;
+  const q = S.queue[i];
+  return { text: q.text, pos: i + 1, ahead: i + (S.live ? 1 : 0), readyAt: q.at + S.cfg.queueSec * 1000 };
 }
 
 // ---------- Reconexión por nickname ----------
@@ -238,7 +280,7 @@ function neighborTeam(t) { return S.teams.length > 1 ? (t + 1) % S.teams.length 
 
 // ---------- Vistas (filtradas por rol en el servidor) ----------
 function deviceView(dev) {
-  const base = { kind: "device", phase: S.phase, code: S.code, paused: S.paused, round: S.round };
+  const base = { kind: "device", phase: S.phase, code: S.code, paused: S.paused, round: S.round, now: Date.now() };
   if (!dev) return { ...base, registered: false };
   const person = S.persons[dev.personId];
   const v = {
@@ -257,15 +299,12 @@ function deviceView(dev) {
   }
   if (dev.team !== null && (S.phase === "activity" || S.phase === "end")) {
     const t = dev.team, team = S.teams[t];
-    // sin Revisor en el equipo, el Arnés hace también de Revisor (regla de respaldo)
-    const fallback = dev.role === "arnes" && !hasRevisor(t);
-    const actsAsRevisor = dev.role === "revisor" || fallback;
-    const read = fallback ? ["C", "D", "E"] : READ[dev.role];
-    v.channel = actsAsRevisor ? "D" : WRITE[dev.role];
-    v.revisor = actsAsRevisor; // puede escoger destino (Thinking / Usuario) y mandar fotos
-    v.fallback = fallback;
-    v.context = { used: usedOf(t), limit: limitOf(t), base: S.cfg.limit, bonus: team.bonus, bonusLog: team.bonusLog, forgot: team.forgot, oldestId: team.msgs[0] ? team.msgs[0].id : null };
-    v.msgs = team.msgs.filter((m) => read.includes(m.ch)).map((m) => msgOut(m, dev.pc));
+    v.sendTo = Object.keys(SEND_TO[dev.role]); // destinos posibles; el Arnés no escribe
+    v.context = { used: usedOf(t), by: usedBy(t), limit: limitOf(t), base: S.cfg.limit, bonus: team.bonus, bonusLog: team.bonusLog, forgot: team.forgot, oldestId: team.msgs[0] ? team.msgs[0].id : null };
+    v.msgs = team.msgs.filter((m) => READ[dev.role].includes(m.ch)).map((m) => msgOut(m, dev.pc));
+    if (dev.role === "modelo") {
+      v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: team.coolUntil || 0, waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec };
+    }
     if (S.phase === "activity") {
       v.question = questionFor(dev.id);
       const nt = neighborTeam(t);
@@ -281,16 +320,16 @@ const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, rol
 
 function adminView() {
   return {
-    kind: "admin", phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(),
+    kind: "admin", phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(), now: Date.now(),
+    live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
+    queue: S.queue.map((q) => ({ team: q.team, text: q.text, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
     devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
       id: d.id, pc: d.pc, role: d.role, team: d.team, online: d.online,
       nick: d.personId && S.persons[d.personId] ? S.persons[d.personId].nick : null,
     })),
     teams: S.teams.map((tm, t) => ({
-      used: usedOf(t), limit: limitOf(t), bonus: tm.bonus, sent: tm.sent, forgotTotal: tm.forgotTotal,
-      warnings: teamWarnings(t), msgs: tm.msgs.map((m) => msgOut(m)),
-      // el Revisor espera respuesta si lo último del canal E lo escribió él
-      waiting: (() => { const e = tm.msgs.filter((m) => m.ch === "E"); return e.length > 0 && e[e.length - 1].role !== "profesor"; })(),
+      used: usedOf(t), by: usedBy(t), limit: limitOf(t), bonus: tm.bonus, sent: tm.sent, forgotTotal: tm.forgotTotal,
+      warnings: teamWarnings(t), msgs: tm.msgs.map((m) => msgOut(m)), coolUntil: tm.coolUntil || 0,
     })),
     rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
       nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
@@ -405,7 +444,10 @@ function loadSnapshot() {
   try {
     const raw = JSON.parse(fs.readFileSync(SNAPSHOT, "utf8"));
     if (Date.now() - raw.savedAt > SNAPSHOT_MAX_AGE_MS) return;
-    S = { ...freshState(), ...raw.state };
+    const fresh = freshState();
+    // un respaldo de la versión con Thinking no sirve: se empieza de cero
+    if (Object.values(raw.state.devices || {}).some((d) => !ROLES.includes(d.role))) return;
+    S = { ...fresh, ...raw.state, cfg: { ...fresh.cfg, ...raw.state.cfg } };
     devList().forEach((d) => (d.online = false));
     console.log(`Sesión ${S.code} recuperada del respaldo (${devList().length} dispositivos).`);
   } catch (_) { /* sin respaldo: sesión nueva */ }
@@ -474,24 +516,35 @@ io.on("connection", (sock) => {
     sync();
   });
 
-  // to: "thinking" | "profesor" (solo el Revisor escoge); image: dataURL de una foto (solo el Revisor)
+  // to: Modelo → "arnes" | "usuario" · Revisor → "modelo" | "arnes"; image: dataURL de una foto (solo el Revisor)
   sock.on("send", ({ text, to, image } = {}, cb) => {
     const dev = myDevice();
     text = cleanText(text, MAX_MSG);
     if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no se puede enviar." });
     if (S.paused) return reply(cb, { error: "La actividad está en pausa." });
-    const actsAsRevisor = dev.role === "revisor" || (dev.role === "arnes" && !hasRevisor(dev.team));
-    const ch = actsAsRevisor ? REVISOR_TO[to] || "D" : WRITE[dev.role];
-    if (!ch) return reply(cb, { error: "Tu rol no escribe: solo construye." });
+    const dests = SEND_TO[dev.role];
+    if (!Object.keys(dests).length) return reply(cb, { error: "Tu rol no escribe: ejecutas lo que diga el Modelo." });
+    if (to !== undefined && !dests[to]) return reply(cb, { error: "Tu rol no le puede escribir a ese rol." });
+    const ch = dests[to || Object.keys(dests)[0]];
     let img = null;
     if (image !== undefined && image !== null) {
-      if (!actsAsRevisor) return reply(cb, { error: "Solo el Revisor puede mandar fotos." });
+      if (dev.role !== "revisor") return reply(cb, { error: "Solo el Revisor puede mandar fotos." });
       if (typeof image !== "string" || !/^data:image\/(jpeg|png|webp);base64,/.test(image) || image.length > MAX_IMG) return reply(cb, { error: "La foto no es válida o es muy grande." });
       img = image;
     }
-    if (dev.role === "thinking") text = asQuestion(text);
     if (!text && !img) return reply(cb, { error: "Escribe algo antes de enviar." });
-    addMsg(dev.team, ch, dev, text, img);
+    const t = dev.team;
+    if (ch === "U" && !(S.live && S.live.team === t)) {
+      // fuera de una conversación abierta, el Modelo entra a la cola del Usuario
+      if (queuePos(t) >= 0) return reply(cb, { error: `Ya estás en la cola del Usuario (puesto ${queuePos(t) + 1}). Espera tu turno.` });
+      const left = Math.ceil(((S.teams[t].coolUntil || 0) - Date.now()) / 1000);
+      if (left > 0) return reply(cb, { error: `Debes esperar ${left} s para volver a escribirle al Usuario.` });
+      S.queue.push({ team: t, text, at: Date.now(), author: authorOf(dev) });
+      serveQueue();
+      reply(cb, { ok: true, queued: queuePos(t) >= 0, pos: queuePos(t) + 1 });
+      return sync();
+    }
+    addMsg(t, ch, authorOf(dev), text, img);
     reply(cb, { ok: true, sent: text });
     sync();
   });
@@ -545,7 +598,10 @@ io.on("connection", (sock) => {
   });
 
   // se puede cambiar en cualquier momento, también en plena actividad
-  adminOn("admin:config", ({ limit, mode, rotSec, autoRot }) => {
+  adminOn("admin:config", ({ limit, mode, rotSec, autoRot, queueSec, coolSec, liveSec }) => {
+    if (queueSec !== undefined) S.cfg.queueSec = Math.max(0, Math.min(900, Math.round(Number(queueSec)) || 0));
+    if (liveSec !== undefined) S.cfg.liveSec = Math.max(1, Math.min(1800, Math.round(Number(liveSec)) || 60));
+    if (coolSec !== undefined) S.cfg.coolSec = Math.max(0, Math.min(1800, Math.round(Number(coolSec)) || 0));
     if (limit !== undefined) S.cfg.limit = Math.max(50, Math.min(5000, Math.round(Number(limit)) || 500));
     if (mode === "mensaje" || mode === "recortar") S.cfg.mode = mode;
     if (rotSec !== undefined) {
@@ -557,21 +613,24 @@ io.on("connection", (sock) => {
     }
     if (autoRot !== undefined) S.cfg.autoRot = !!autoRot;
     S.teams.forEach((_, t) => enforce(t));
+    serveQueue();
   });
   adminOn("admin:setTimer", ({ sec }) => {
     const n = Math.round(Number(sec));
     if (!(n >= 5 && n <= 3600)) return "Escribe entre 5 segundos y 60 minutos.";
     S.timerLeft = n;
   });
-  // el profesor le responde al Revisor de un equipo (canal E)
+  // el Usuario (profesor) le escribe al Modelo de un equipo (canal U); llega al instante
   adminOn("admin:reply", ({ team, text }) => {
     text = cleanText(text, MAX_MSG);
     const t = Number(team);
     if (S.phase !== "activity" && S.phase !== "rotate") return "Solo durante la actividad.";
     if (!S.teams[t]) return "Equipo inválido.";
     if (!text) return "Escribe la respuesta.";
-    addMsg(t, "E", null, text);
+    addMsg(t, "U", authorOf(null), text);
   });
+  // cierra la conversación abierta y pasa al siguiente Modelo de la cola
+  adminOn("admin:endLive", () => { if (!S.live) return "No hay ninguna conversación abierta."; endLive(); });
   // suelta un puesto trabado para que su persona vuelva desde otro iPad con su nickname
   adminOn("admin:release", ({ deviceId }) => {
     const dev = S.devices[deviceId];
@@ -601,29 +660,37 @@ io.on("connection", (sock) => {
     if (!dev) return;
     if (S.phase === "rotate") return "Espera a que termine la rotación.";
     if (dev.personId) delete S.persons[dev.personId];
+    if (dev.role === "modelo" && dev.team !== null) {
+      S.queue = S.queue.filter((q) => q.team !== dev.team);
+      if (S.live && S.live.team === dev.team) endLive();
+    }
     delete S.devices[deviceId];
     delete S.questions[deviceId];
     if (S.phase === "lobby") pruneEmptyTeams();
   });
   adminOn("admin:start", () => {
     if (S.phase !== "lobby") return "La actividad ya empezó.";
-    if (!S.teams.some((_, t) => CORE.every((r) => deviceAt(t, r)))) return "Se necesita al menos un equipo con Thinking, Modelo y Arnés.";
+    if (!S.teams.some((_, t) => CORE.every((r) => deviceAt(t, r)))) return "Se necesita al menos un equipo con Modelo y Arnés.";
     S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.paused = false;
   });
   adminOn("admin:prompt", ({ text, team }) => {
     text = cleanText(text, 600);
     if (S.phase !== "activity") return "Inicia la actividad primero.";
     if (!text) return "Escribe el prompt.";
-    S.teams.forEach((_, t) => { if (team === "all" || Number(team) === t) addMsg(t, "A", null, text); });
+    S.teams.forEach((_, t) => { if (team === "all" || Number(team) === t) addMsg(t, "U", authorOf(null), text); });
   });
-  adminOn("admin:pause", () => { if (S.phase !== "activity") return "Solo durante la actividad."; S.paused = !S.paused; });
+  adminOn("admin:pause", () => {
+    if (S.phase !== "activity") return "Solo durante la actividad.";
+    S.paused = !S.paused;
+    if (!S.paused && S.live) S.live.lastAt = Date.now(); // la pausa no cuenta para el cierre automático
+  });
   adminOn("admin:addTime", ({ sec }) => { S.timerLeft = Math.max(0, S.timerLeft + (Number(sec) || 60)); });
   adminOn("admin:rotate", () => {
     if (S.phase !== "activity") return "Solo durante la actividad.";
     if (!startRotation()) return "No hay suficientes personas para rotar.";
   });
   adminOn("admin:forceResume", () => { if (S.phase !== "rotate") return; Object.keys(S.rot.assign).forEach((pid) => (S.rot.ready[pid] = true)); finishRotation(); });
-  adminOn("admin:end", () => { S.phase = "end"; S.rot = null; S.paused = false; });
+  adminOn("admin:end", () => { S.phase = "end"; S.rot = null; S.paused = false; S.queue = []; S.live = null; });
   adminOn("admin:reset", () => { S = freshState(); });
 
   sock.on("disconnect", () => {
@@ -634,12 +701,15 @@ io.on("connection", (sock) => {
   });
 });
 
-// ---------- Reloj de rotación ----------
+// ---------- Reloj: rotación y cola del Usuario ----------
 setInterval(() => {
-  if (S.phase !== "activity" || S.paused || !autoRot()) return;
-  S.timerLeft = Math.max(0, S.timerLeft - 1);
-  if (S.timerLeft === 0) { if (startRotation()) sync(); else { S.timerLeft = S.cfg.rotSec; syncAdmins(); } }
-  else syncAdmins();
+  if (S.phase !== "activity" || S.paused) return;
+  let all = liveTimeout() || serveQueue();
+  if (autoRot()) {
+    S.timerLeft = Math.max(0, S.timerLeft - 1);
+    if (S.timerLeft === 0) { if (startRotation()) all = true; else S.timerLeft = S.cfg.rotSec; }
+  }
+  if (all) sync(); else syncAdmins();
 }, 1000);
 
 // ---------- Arranque ----------

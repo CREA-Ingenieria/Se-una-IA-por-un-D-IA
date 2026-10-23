@@ -1,4 +1,4 @@
-// Prueba de humo: levanta el servidor y simula 8 iPads + el admin.
+// Prueba de humo: levanta el servidor y simula 6 iPads (2 equipos de Modelo, Arnés y Revisor) + el admin.
 // Uso: npm test
 process.env.PORT = process.env.PORT || "3999";
 process.env.SEUNAIA_SIN_MDNS = "1";
@@ -13,7 +13,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
 
 (async () => {
   await new Promise((r) => server.listening ? r() : server.once("listening", r));
-  const roles = ["thinking", "modelo", "arnes", "revisor", "thinking", "modelo", "arnes", "revisor"];
+  const roles = ["modelo", "arnes", "revisor", "modelo", "arnes", "revisor"];
   const pads = [];
   for (let i = 0; i < roles.length; i++) {
     const s = io(URL, { forceNew: true });
@@ -24,6 +24,11 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
     check(r.ok, `iPad ${i} entra como ${roles[i]}`);
     pads.push(s);
   }
+  const otroThinking = io(URL, { forceNew: true });
+  await new Promise((r) => otroThinking.on("connect", r));
+  await call(otroThinking, "hello", { deviceId: "ipad-thinking" });
+  check((await call(otroThinking, "join", { nick: "tk", role: "thinking" })).error, "el rol Thinking ya no existe");
+  otroThinking.close();
   const admin = io(URL, { forceNew: true });
   admin.last = null; admin.on("view", (v) => (admin.last = v));
   await new Promise((r) => admin.on("connect", r));
@@ -35,23 +40,61 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   check((await call(admin, "admin:start", {})).ok, "admin inicia");
   check((await call(admin, "admin:prompt", { text: "Construyan un puente de pasta", team: "all" })).ok, "prompt a todos");
   await wait(100);
-  check(pads[0].last.msgs.some((m) => m.ch === "A"), "Thinking ve el prompt");
-  check(!pads[1].last.msgs.some((m) => m.ch === "A"), "Modelo NO ve el prompt");
-  check((await call(pads[2], "send", { text: "hola" })).error, "Arnés no puede escribir");
-  await call(pads[0], "send", { text: "Plan: base en triángulos" });
-  await call(pads[1], "send", { text: "Corta 6 palitos" });
+  check(pads[0].last.msgs.some((m) => m.ch === "U"), "el Modelo ve el prompt del Usuario");
+  check(!pads[1].last.msgs.some((m) => m.ch === "U") && !pads[2].last.msgs.some((m) => m.ch === "U"), "Arnés y Revisor NO ven al Usuario");
+
+  // --- reglas de interacción ---
+  check((await call(pads[1], "send", { text: "hola" })).error, "Arnés no puede escribir");
+  await call(pads[0], "send", { text: "Corta 6 palitos", to: "arnes" });
+  await call(pads[2], "send", { text: "El lado izquierdo se dobla", to: "modelo" });
+  await call(pads[2], "send", { text: "Refuerza el lado izquierdo", to: "arnes" });
+  check((await call(pads[0], "send", { text: "hola revisor", to: "revisor" })).error, "el Modelo no le puede escribir al Revisor");
+  check((await call(pads[2], "send", { text: "hola usuario", to: "usuario" })).error, "el Revisor no le puede escribir al Usuario");
   await wait(100);
-  check(pads[2].last.msgs.length === 1 && pads[2].last.msgs[0].ch === "C", "Arnés solo ve el canal C");
-  check(pads[3].last.msgs.some((m) => m.ch === "C"), "Revisor ve el canal C");
-  check(!pads[4].last.msgs.some((m) => m.ch === "B"), "el otro equipo no ve estos mensajes");
+  const chs = (p) => [...new Set(p.last.msgs.map((m) => m.ch))].sort().join("");
+  check(chs(pads[1]) === "CH", "Arnés solo recibe del Modelo (C) y del Revisor (H): " + chs(pads[1]));
+  check(chs(pads[0]) === "CRU", "Modelo ve Usuario, sus órdenes y la retroalimentación del Revisor: " + chs(pads[0]));
+  check(chs(pads[2]) === "CHR", "Revisor ve las órdenes al Arnés y lo que él escribe: " + chs(pads[2]));
+  check(!pads[2].last.msgs.some((m) => m.role === "modelo" && m.ch !== "C"), "el Modelo no le escribe al Revisor");
+  check(!pads[3].last.msgs.some((m) => m.ch === "C"), "el otro equipo no ve estos mensajes");
+  const by = pads[0].last.context.by;
+  check(by.profesor > 0 && by.modelo > 0 && by.revisor > 0 && by.profesor + by.modelo + by.revisor === pads[0].last.context.used, "la barra de contexto se reparte por componente");
+
+  // --- cola del Usuario y enfriamiento ---
+  await call(admin, "admin:config", { queueSec: 1, coolSec: 3 });
+  const q0 = await call(pads[0], "send", { text: "¿De qué largo el puente?", to: "usuario" });
+  const q1 = await call(pads[3], "send", { text: "¿Podemos usar cinta?", to: "usuario" });
+  check(q0.queued && q0.pos === 1 && q1.queued && q1.pos === 2, "dos Modelos entran a la cola en orden");
+  check((await call(pads[0], "send", { text: "otra", to: "usuario" })).error, "un Modelo en cola no puede volver a hacer fila");
+  await wait(100);
+  check(!pads[0].last.msgs.some((m) => m.text === "¿De qué largo el puente?"), "mientras espera, el Usuario no recibe el mensaje");
+  await wait(2200);
+  check(admin.last.live && admin.last.live.team === 0, "pasado el tiempo de cola, el Usuario atiende al Modelo 1");
+  check(admin.last.queue.length === 1 && admin.last.queue[0].team === 1, "el Modelo 2 sigue esperando a que termine la conversación con el 1");
+  check(pads[0].last.usuario.live && pads[0].last.msgs.some((m) => m.text === "¿De qué largo el puente?"), "el Modelo 1 ve que lo atienden");
+  check((await call(pads[0], "send", { text: "¿y de ancho?", to: "usuario" })).ok, "en la conversación el Modelo escribe sin cola");
+  check((await call(admin, "admin:reply", { team: 0, text: "40 cm de largo, 10 de ancho" })).ok, "el Usuario responde al Modelo");
+  await wait(100);
+  const u0 = pads[0].last.msgs.filter((m) => m.ch === "U").map((m) => m.text);
+  check(u0.includes("¿y de ancho?") && u0.includes("40 cm de largo, 10 de ancho"), "los mensajes de la conversación llegan al instante");
+  check((await call(admin, "admin:endLive", {})).ok, "el Usuario termina la conversación");
+  await wait(100);
+  check(admin.last.live && admin.last.live.team === 1 && admin.last.queue.length === 0, "al terminar, pasa de inmediato el Modelo 2");
+  const cool = await call(pads[0], "send", { text: "una más", to: "usuario" });
+  check(cool.error && /esperar/.test(cool.error), "el Modelo 1 queda en enfriamiento: " + cool.error);
+  await call(admin, "admin:config", { liveSec: 1 });
+  await wait(2200);
+  check(admin.last.live === null, "si nadie escribe, la conversación se cierra sola");
+  check(admin.last.teams[1].coolUntil > Date.now(), "el cierre automático también deja al Modelo en enfriamiento");
+
   await call(admin, "admin:config", { limit: 100 });
-  await call(pads[0], "send", { text: "x".repeat(90) });
+  await call(pads[0], "send", { text: "x".repeat(90), to: "arnes" });
   await wait(100);
   check(pads[0].last.context.used <= 100, "ventana de contexto borra lo más viejo (" + pads[0].last.context.used + "/100)");
   const q = pads[0].last.question;
   const r = await call(pads[0], "answer", { qid: q.id, k: 1 });
   await wait(100);
-  check(r.correct && pads[4].last.context.limit === 140, "acierto da +40 al vecino de mesa (límite " + pads[4].last.context.limit + ")");
+  check(r.correct && pads[3].last.context.limit === 140, "acierto da +40 al vecino de mesa (límite " + pads[3].last.context.limit + ")");
   check(pads[0].last.context.limit === 100, "el que acierta no gana para sí");
 
   // --- contexto base y rotación se cambian en plena actividad ---
@@ -64,31 +107,15 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   check(admin.last.timerLeft === 90 && admin.last.cfg.autoRot === false, "con la rotación detenida el reloj no corre");
   await call(admin, "admin:config", { autoRot: true });
 
-  // --- Thinking: todo sale como pregunta ---
-  await call(pads[0], "send", { text: "usamos cinta en las uniones." });
-  await wait(100);
-  const q1 = pads[1].last.msgs.filter((m) => m.ch === "B").pop();
-  check(q1 && q1.text === "¿usamos cinta en las uniones?", "Thinking: se agregan ¿ ? solos (" + (q1 && q1.text) + ")");
-
-  // --- Revisor ↔ Usuario (canal E) ---
-  check((await call(pads[3], "send", { text: "¿Puede ser de 40 cm?", to: "profesor" })).ok, "Revisor le escribe al Usuario");
-  await wait(100);
-  check(admin.last.teams[0].waiting === true, "el admin ve que el Revisor espera respuesta");
-  check(!pads[0].last.msgs.some((m) => m.ch === "E"), "Thinking no ve el canal Revisor↔Usuario");
-  check((await call(admin, "admin:reply", { team: 0, text: "Sí, hasta 40 cm" })).ok, "el admin responde al Revisor");
-  await wait(100);
-  check(pads[3].last.msgs.some((m) => m.ch === "E" && m.role === "profesor"), "el Revisor ve la respuesta");
-  check(admin.last.teams[0].waiting === false, "ya no aparece como pendiente");
-
   // --- fotos del Revisor ---
   const jpg = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
-  check((await call(pads[3], "send", { text: "así va", to: "thinking", image: jpg })).ok, "Revisor manda una foto a Thinking");
+  check((await call(pads[2], "send", { text: "así va", to: "modelo", image: jpg })).ok, "Revisor manda una foto al Modelo");
   await wait(100);
   const ph = pads[0].last.msgs.find((m) => m.img);
-  check(!!ph, "Thinking recibe la foto");
+  check(!!ph, "el Modelo recibe la foto");
   const res = ph ? await fetch(`${URL}${ph.img}`) : null;
   check(res && res.status === 200 && res.headers.get("content-type") === "image/jpeg", "la foto se descarga por /img");
-  check((await call(pads[1], "send", { text: "x", image: jpg })).error, "el Modelo no puede mandar fotos");
+  check((await call(pads[0], "send", { text: "x", to: "arnes", image: jpg })).error, "el Modelo no puede mandar fotos");
 
   // --- reconexión por nickname ---
   const otro = io(URL, { forceNew: true });

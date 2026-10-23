@@ -1,6 +1,6 @@
 # Sé una IA por un d-IA · versión alpha
 
-Aplicación de chat rooms para la experiencia de CREA (Facultad de Ingeniería, Uniandes): grupos de 4 personas se comportan como un agente de IA (Thinking, Modelo, Arnés y Revisor) con memoria limitada, mientras construyen algo físico.
+Aplicación de chat rooms para la experiencia de CREA (Facultad de Ingeniería, Uniandes): grupos de 3 personas se comportan como un agente de IA (Modelo, Arnés y Revisor) con memoria limitada, mientras construyen algo físico.
 
 Un **PC de la universidad** hace de servidor central. Los iPads o PCs de la sala solo abren una dirección en el navegador; no se instala nada en ellos.
 
@@ -95,32 +95,42 @@ El hotspot de Windows tiene límites:
 
 ## Cómo corre la actividad
 
-1. **Antes**: el admin abre `/admin`, entra con la clave y define el límite de contexto (caracteres), si se borra el mensaje completo o letra por letra, y el tiempo entre rotaciones.
+1. **Antes**: el admin abre `/admin`, entra con la clave y define el límite de contexto (caracteres), si se borra el mensaje completo o letra por letra, el tiempo entre rotaciones, la espera mínima de la **cola** y el **enfriamiento** del Modelo (ver más abajo).
 2. **Llegada**: cada persona, en el iPad de su mesa, escribe su nickname y escoge el rol de esa mesa. El sistema numera el iPad (PC 1, PC 2…) y arma los equipos solo, con una persona por rol (máximo 8 equipos). Mientras tanto ven la pista de su rol y "esperando jugadores".
-3. **Ajustes**: en la tabla del admin se cambia el rol o el equipo de cualquier iPad; si el puesto ya está ocupado, se intercambian. Si un equipo no tiene Revisor, su Arnés puede escribir el feedback a Thinking (regla de respaldo de la especificación).
-4. **Iniciar actividad** y **enviar el prompt** a todos los Thinking o a un solo equipo.
-5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo; al llenarse se borra lo más viejo con un aviso.
+3. **Ajustes**: en la tabla del admin se cambia el rol o el equipo de cualquier iPad; si el puesto ya está ocupado, se intercambian. Para iniciar, cada equipo necesita al menos Modelo y Arnés; sin Revisor nadie le da retroalimentación al Modelo.
+4. **Iniciar actividad** y **enviar el prompt** a todos los Modelos o a un solo equipo.
+5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso.
 6. **Minijuego**: al lado del chat hay preguntas cortas. Cada acierto da +40 caracteres al **vecino de mesa** (mismo rol, equipo siguiente), nunca a quien responde.
 7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), cada iPad muestra en blanco "nick, levántate y ve al PC X" y en grande **ESTE ES EL PC Y**. El sistema escoge un PC al azar con un rol que esa persona no ha hecho. Quien llega toca **¡LISTO!** y, cuando todos están listos, la actividad sigue. El rol y el equipo están atados al iPad, no a la persona.
 8. **Terminar** muestra un resumen por equipo. **Nueva sesión** borra todo.
 
 ### Canales y reglas de cada rol
 
+La frase de cada rol: **Modelo: Piensa** · **Arnés: Ejecuta lo que diga el Modelo** · **Revisor: Describe las acciones del Arnés**.
+
 | Canal | Quién escribe → quién lee |
 |---|---|
-| A | Usuario (profesor) → Thinking |
-| B | Thinking → Modelo. **Todo lo que escribe Thinking sale como pregunta: el sistema agrega `¿ ?` solo.** |
+| U | Usuario (profesor) ↔ Modelo. **El Modelo es el único que habla con el Usuario.** El Arnés y el Revisor no lo ven |
 | C | Modelo → Arnés (el Revisor también lo lee) |
-| D | Revisor → Thinking, con texto o **fotos** |
-| E | Revisor ↔ Usuario (profesor), para confirmar algo. Thinking no lo ve |
+| R | Revisor → Modelo: retroalimentación, con texto o **fotos** |
+| H | Revisor → Arnés: actualiza las acciones del Arnés, con texto o fotos |
 
-Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se puede plegar:
+El Modelo no le escribe al Revisor, y el Arnés solo recibe (del Modelo y del Revisor). Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se puede plegar:
 
-- **Thinking**: piensa el plan y se lo pregunta al Modelo; no habla con el Arnés ni toca materiales.
-- **Modelo**: solo escribe órdenes al Arnés para que las haga físicamente; no ve el prompt del Usuario.
-- **Arnés (ejecutor)**: solo hace cosas físicas con los materiales; no escribe.
-- **Revisor**: observa al Arnés y reporta a Thinking (texto o fotos). Con el interruptor **Thinking / Usuario (profesor)** puede escribirle al profesor cuando necesita una confirmación.
+- **Modelo**: piensa el plan, habla con el Usuario (a través de la cola), da órdenes al Arnés y recibe la retroalimentación del Revisor. Con el interruptor **Arnés / Usuario** escoge a quién le escribe.
+- **Arnés (ejecutor)**: hace con los materiales lo que diga el Modelo; no escribe.
+- **Revisor**: describe lo que hace el Arnés; retroalimenta al Modelo y actualiza al Arnés. Con el interruptor **Modelo / Arnés** escoge a quién le escribe.
 - **Todos**: prohibido usar internet, el celular o buscar información; el agente solo sabe lo que está en el chat.
+
+### Cola y enfriamiento para hablar con el Usuario
+
+Varios equipos juegan a la vez y el Usuario atiende a **un Modelo a la vez**:
+
+- Cuando un Modelo le escribe al Usuario, su mensaje **entra a una cola** (botón *Hacer fila*). Espera al menos el tiempo de cola (1 min por defecto) y, además, a que el Usuario termine con los que llegaron antes. Con Modelo 1, 2 y 3 en fila: el 1 espera 1 min, el 2 espera 1 min + lo que tome atender al 1, y el 3 espera 1 min + lo que tome atender al 1 y al 2.
+- Cuando le llega el turno, se abre la **conversación**: en el iPad del Modelo y en el panel del admin el chat se agranda y los mensajes van y vienen **al instante, sin cola ni espera**.
+- El admin la cierra con **Terminar y atender al siguiente**. Si se le olvida, la conversación **se cierra sola tras 1 min sin mensajes** (ajustable), para que la cola no se quede detenida; cada mensaje de cualquiera de los dos reinicia ese minuto. Desde ahí, ese Modelo queda en **enfriamiento** (1 min por defecto) antes de poder volver a hacer fila.
+- La espera de la cola, el enfriamiento y el cierre automático se ajustan en el panel admin (antes de empezar y en plena actividad).
+- El Usuario puede escribirle a cualquier Modelo cuando quiera (prompt o *Ver los canales*); eso no pasa por la cola.
 
 **Fotos del Revisor**: el botón de cámara abre la cámara del iPad. La foto se reduce en el iPad (máximo 1280 px) antes de enviarse y ocupa 120 caracteres de contexto. Cuando se olvida, se borra también del servidor.
 
@@ -128,7 +138,8 @@ Cada iPad tiene a un lado del chat la casilla **"Reglas de tu rol"**, que se pue
 
 - **Rotación**: interruptor *Automática / Detenida* (detenida = el reloj no corre), −1 min, +1 min, *Reiniciar a…*, duración entre rotaciones y *Rotar ya*. Todo se puede cambiar en cualquier momento.
 - **Contexto base**: −50 / +50 caracteres por equipo, en vivo. Si se baja, cada equipo olvida lo que ya no quepa.
-- **Revisor esperando**: cuando un Revisor escribe al Usuario, la tarjeta del equipo se ilumina en amarillo, sale un aviso y el botón *Responder* abre sus canales con un campo para contestarle.
+- **Cola de Modelos**: arriba se ve quién está esperando, cuánto le falta y qué escribió. La conversación abierta aparece en un chat grande con el botón *Terminar y atender al siguiente*; la tarjeta de ese equipo se ilumina en amarillo.
+- **Cola y enfriamiento**: se cambian en vivo desde los controles.
 - *Pausar actividad*, ver los canales de cualquier equipo y *Reanudar sin esperar* durante una rotación.
 
 ## Si algo falla
@@ -148,7 +159,7 @@ node tools/bots.js 7 http://localhost
 
 Entran 7 jugadores de prueba que responden en su canal y marcan listo al rotar. Tú entras desde el navegador como el octavo.
 
-Para revisar las reglas principales (canales, contexto, minijuego, rotación) sin abrir el navegador:
+Para revisar las reglas principales (canales, cola, enfriamiento, contexto, minijuego, rotación) sin abrir el navegador:
 
 ```bash
 npm test

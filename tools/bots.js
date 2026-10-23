@@ -1,19 +1,20 @@
 // Jugadores de prueba para ensayar sin gente.
 // Uso: node tools/bots.js [cantidad=7] [url=http://localhost]
-// Entran repartidos entre los 4 roles, responden en su canal y marcan LISTO al rotar.
+// Entran repartidos entre los 3 roles, responden en su canal y marcan LISTO al rotar.
 const { io } = require("socket.io-client");
 const N = Number(process.argv[2]) || 7;
 const URL = process.argv[3] || "http://localhost";
-const ROLES = ["modelo", "arnes", "revisor", "thinking"];
+const ROLES = ["modelo", "arnes", "revisor"];
 const LINES = {
-  thinking: ["Plan: base con triángulos, 30 cm de largo.", "Reforcemos el centro con doble capa.", "Hagamos un arco debajo para repartir el peso."],
   modelo: ["1. Corta 6 palitos de 10 cm. 2. Une 3 en triángulo.", "Pon una segunda capa encima del tablero.", "Dobla 3 tallarines en arco bajo el centro."],
   revisor: ["El lado izquierdo se dobla.", "Las uniones están firmes.", "El tablero se hunde en el centro."],
 };
-const LISTEN = { thinking: ["A", "D"], modelo: ["B"], revisor: ["C"] };
+// qué canales escucha cada rol y a quién le contesta (el Arnés no escribe)
+const LISTEN = { modelo: ["U", "R"], revisor: ["C"] };
+const TO = { modelo: ["arnes"], revisor: ["modelo", "arnes"] };
 
 for (let i = 0; i < N; i++) {
-  const role = ROLES[i % 4], s = io(URL, { forceNew: true });
+  const role = ROLES[i % ROLES.length], s = io(URL, { forceNew: true });
   let seen = new Set(), line = 0, joined = false, readySent = false;
   s.on("connect", () => s.emit("hello", { deviceId: "bot-" + i }, () => {
     if (!joined) s.emit("join", { nick: "bot" + (i + 1), role }, () => (joined = true));
@@ -28,9 +29,9 @@ for (let i = 0; i < N; i++) {
     const myRole = v.you.role, listen = LISTEN[myRole] || [];
     const fresh = v.msgs.filter((m) => !seen.has(m.id));
     fresh.forEach((m) => seen.add(m.id));
-    if (v.channel && fresh.some((m) => !m.mine && listen.includes(m.ch))) {
-      const arr = LINES[myRole] || LINES.revisor;
-      setTimeout(() => s.emit("send", { text: arr[line++ % arr.length] }, () => {}), 2500 + Math.random() * 3500);
+    if (v.sendTo && v.sendTo.length && fresh.some((m) => !m.mine && listen.includes(m.ch))) {
+      const arr = LINES[myRole], to = TO[myRole][line % TO[myRole].length];
+      setTimeout(() => s.emit("send", { text: arr[line++ % arr.length], to }, () => {}), 2500 + Math.random() * 3500);
     }
   });
 }
