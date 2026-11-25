@@ -60,7 +60,8 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (_) {} },
 };
 
-function deviceId() {
+// id estable de ESTE teléfono (su dueño). El servidor lo usa para seguir a la persona a su asiento actual.
+function browserId() {
   let id = store.get("seunaia-device");
   if (!id) {
     id = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -89,7 +90,7 @@ socket.on("connect", () => {
   if (IS_ADMIN) {
     const token = store.get("seunaia-admin");
     if (token) emit("admin:login", { token }).then((r) => { if (!r.ok) { store.del("seunaia-admin"); render(); } });
-  } else socket.emit("hello", { deviceId: deviceId() });
+  } else socket.emit("hello", { browserId: browserId() });
   render();
 });
 socket.on("disconnect", () => { L.connected = false; render(); });
@@ -111,8 +112,8 @@ socket.on("view", (v) => {
 socket.on("released", () => {
   store.del("seunaia-device");
   L.view = null;
-  socket.emit("hello", { deviceId: deviceId() });
-  toast("El admin liberó este iPad. Entra con tu nickname para volver a tu puesto.");
+  socket.emit("hello", { browserId: browserId() });
+  toast("El admin liberó tu puesto. Entra con tu nickname para volver a él.");
 });
 
 // ---------- Piezas ----------
@@ -275,14 +276,17 @@ function vMini(v) {
 }
 
 function vRotate(v) {
-  const R = v.rotation;
+  const R = v.rotation, o = R.outgoing;
   return `${topbar()}<div class="stage rotate">
-    ${R.outgoing ? `<div class="go">${esc(R.outgoing.nick)}, levántate y ve al <b>PC ${R.outgoing.toPc}</b></div><div class="divider"></div>` : ""}
-    <span class="muted" style="font-size:13px;font-weight:600;letter-spacing:.3em">ESTE ES EL</span>
-    <span class="big" style="font-size:clamp(110px,22vw,260px);text-shadow:0 0 30px rgba(255,255,255,.45)">PC ${v.you.pc}</span>
-    ${R.incoming ? `<div style="font-size:15px;color:var(--soft)">Aquí se sienta: <b style="color:#fff">${esc(R.incoming.nick)}</b></div>
-      ${R.incoming.ready ? `<span class="pill" style="background:var(--t);color:#000;height:44px;font-size:14px">✓ ${esc(R.incoming.nick)} está listo</span>`
-      : `<button class="btn white" style="min-width:220px;min-height:56px;font-size:20px;animation:pulse 2s ease-in-out infinite" data-act="ready" data-id="${R.incoming.id}">¡LISTO!</button>`}` : ""}
+    ${o ? `<div class="go">${esc(o.nick)}, levántate y ve al <b>PC ${o.toPc}</b></div><div class="divider"></div>
+      <span class="muted" style="font-size:13px;font-weight:600;letter-spacing:.3em">AHORA ERES</span>
+      ${rolePill(o.toRole, ARTICLE[o.toRole])}
+      <span class="big" style="font-size:clamp(90px,18vw,220px);text-shadow:0 0 30px rgba(255,255,255,.45)">PC ${o.toPc}</span>
+      <div class="phrase" style="color:${RC[o.toRole]}">${esc(RN[o.toRole])}: ${esc(PHRASE[o.toRole])}</div>`
+    : `<span class="muted" style="font-size:16px">Espera la siguiente ronda…</span>`}
+    ${R.me ? (R.me.ready
+      ? `<span class="pill" style="background:var(--t);color:#000;height:44px;font-size:14px">✓ Estás en tu puesto</span>`
+      : `<button class="btn white" style="min-width:240px;min-height:56px;font-size:20px;animation:pulse 2s ease-in-out infinite" data-act="ready">¡YA LLEGUÉ A MI PUESTO!</button>`) : ""}
     <span class="muted" style="font-size:12px;font-weight:600;letter-spacing:.2em">LISTOS <b class="dots" style="font-size:22px;color:#fff">${R.ready}/${R.total}</b></span>
   </div>`;
 }
@@ -290,7 +294,7 @@ function vRotate(v) {
 function vDevice(v) {
   if (!v || !v.registered) return vLanding();
   if (v.phase === "end") return `${topbar()}<div class="stage"><span class="big" style="font-size:clamp(60px,12vw,140px)">FIN</span><p class="muted">Gracias por ser una IA por un día.</p></div>`;
-  if (v.phase === "rotate" && v.rotation && (v.rotation.outgoing || v.rotation.incoming)) return vRotate(v);
+  if (v.phase === "rotate" && v.rotation && (v.rotation.outgoing || v.rotation.me)) return vRotate(v);
   if (v.phase === "activity" && v.context) return vChat(v);
   return vWaiting(v);
 }
@@ -315,7 +319,7 @@ function secOpts(list, cur) {
 function teamOptions(v, d) {
   const opts = [`<option value=""${d.team === null ? " selected" : ""}>Sin equipo</option>`];
   v.teams.forEach((_, t) => opts.push(`<option value="${t}"${d.team === t ? " selected" : ""}>Equipo ${t + 1}</option>`));
-  if (v.teams.length < 8) opts.push(`<option value="${v.teams.length}">+ Equipo nuevo</option>`);
+  if (v.teams.length < (v.maxTeams || 8)) opts.push(`<option value="${v.teams.length}">+ Equipo nuevo</option>`);
   return opts.join("");
 }
 function devTable(v) {
@@ -346,6 +350,7 @@ function teamCard(v, tm, t, live) {
 function vAdmin(v) {
   const head = (title, right) => `${topbar(`<span class="lbl" style="font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--y)">PANEL ADMIN · ${esc(v.code)}</span>`)}<div class="admhead"><h1 class="h1" style="font-size:34px;color:var(--y)">${title}</h1><div class="row">${right}</div></div>`;
   const resetBtn = `<button class="btn dark" data-act="reset">${L.confirm === "reset" ? "¿Seguro? Se borra todo" : "Nueva sesión"}</button>`;
+  const exportBtn = `<button class="btn dark" data-act="export" title="Descarga los chats de la sesión en JSON para analizarlos">Descargar historial</button>`;
   const ac = v.acceso;
   const connBtn = `<a class="btn dark" style="display:inline-flex;align-items:center;text-decoration:none" href="/conectar" target="_blank" rel="noopener">Pantalla de conexión (QR) ↗</a>`;
   const accessCard = ac ? `<div class="card" style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:10px 24px;align-items:center">
@@ -373,14 +378,14 @@ function vAdmin(v) {
     </div>`;
   }
   if (v.phase === "end") {
-    return `<div class="adm">${head("RESUMEN", resetBtn)}<div class="teams">${v.teams.map((tm, t) => `<div class="card team"><h3>EQUIPO ${t + 1}</h3><span>${tm.sent} mensajes enviados</span><span>${tm.forgotTotal} caracteres olvidados</span><span>+${tm.bonus} caracteres ganados en el minijuego</span></div>`).join("")}</div></div>`;
+    return `<div class="adm">${head("RESUMEN", exportBtn + resetBtn)}<div class="teams">${v.teams.map((tm, t) => `<div class="card team"><h3>EQUIPO ${t + 1}</h3><span>${tm.sent} mensajes enviados</span><span>${tm.forgotTotal} caracteres olvidados</span><span>+${tm.bonus} caracteres ganados en el minijuego</span></div>`).join("")}</div></div>`;
   }
   const rot = v.phase === "rotate";
   const ready = rot ? v.rotation.filter((x) => x.ready).length : 0;
   const auto = v.cfg.autoRot !== false;
   const right = `<span style="font-size:12px;font-weight:600;letter-spacing:.12em">${rot ? "LISTOS" : "RONDA " + v.round + (auto ? " · ROTACIÓN EN" : " · ROTACIÓN DETENIDA")} <b class="dots" style="font-size:26px">${rot ? ready + "/" + v.rotation.length : mmss(v.timerLeft)}</b></span>
     ${rot ? `<button class="btn" style="background:var(--t)" data-act="forceResume">Reanudar sin esperar</button>` : `<button class="btn dark" data-act="pause">${v.paused ? "Reanudar actividad" : "Pausar actividad"}</button><button class="btn" style="background:var(--m);color:#fff" data-act="rotate">Rotar ya</button>`}
-    <button class="btn dark" data-act="end">${L.confirm === "end" ? "¿Seguro? Terminar" : "Terminar"}</button>${connBtn}`;
+    <button class="btn dark" data-act="end">${L.confirm === "end" ? "¿Seguro? Terminar" : "Terminar"}</button>${exportBtn}${connBtn}`;
   // controles en vivo: rotación y contexto base se pueden cambiar en plena actividad
   const controls = rot ? "" : `<div class="card ctl">
     <div class="ctlgrp"><span class="ctlt">ROTACIÓN</span>
@@ -511,6 +516,19 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "to") { L.to = el.dataset.to; render(); $("#msg") && !$("#msg").disabled && $("#msg").focus(); return; }
   if (act === "endLive") { await emit("admin:endLive"); return; }
+  if (act === "export") {
+    const r = await emit("admin:export");
+    if (r.ok && r.data) {
+      const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "seunaia-" + (r.data.sesion || "sesion") + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast("Historial descargado.");
+    }
+    return;
+  }
   if (act === "pick") { L.picking = Date.now(); return; } // abre el selector de fotos (lo hace el <label>)
   if (act === "autoRot") { await emit("admin:config", { autoRot: !(L.view.cfg.autoRot !== false) }); return; }
   if (act === "timer") { await emit("admin:setTimer", { sec: Math.max(5, L.view.timerLeft + Number(el.dataset.d)) }); return; }
@@ -533,7 +551,7 @@ document.addEventListener("click", async (e) => {
     if (r.ok) { if (caption) inp.value = ""; toast(r.queued ? `Archivo en la cola del Usuario: puesto ${r.pos}.` : "Archivo reenviado al Usuario."); }
     return;
   }
-  if (act === "ready") { await emit("ready", { personId: +id }); return; }
+  if (act === "ready") { await emit("ready"); return; }
   if (act === "start") { const r = await emit("admin:start"); if (r.ok) toast("¡Actividad iniciada! Envía el prompt a los Modelos."); return; }
   if (act === "reshuffle") { const r = await emit("admin:reshuffle"); if (r.ok) toast("Equipos rearmados."); return; }
   if (act === "pause") { await emit("admin:pause"); return; }
@@ -570,7 +588,7 @@ function uploadFile(blob, type, name) {
     const x = new XMLHttpRequest();
     x.open("POST", "/subir");
     x.setRequestHeader("Content-Type", type);
-    x.setRequestHeader("X-Device", deviceId());
+    x.setRequestHeader("X-Device", browserId());
     x.setRequestHeader("X-Name", encodeURIComponent(name || ""));
     x.upload.onprogress = (e) => { if (e.lengthComputable && e.total > 300000) toast(`Subiendo… ${Math.round((e.loaded / e.total) * 100)}%`); };
     x.onload = () => { let r = {}; try { r = JSON.parse(x.responseText); } catch (_) {} if (r.id) resolve(r.id); else reject(new Error(r.error || "No se pudo subir el archivo.")); };

@@ -18,13 +18,13 @@ const REPORT_MS = 15000;
 for (let i = 0; i < N; i++) {
   const role = ROLES[i % ROLES.length], s = io(URL, { forceNew: true });
   let seen = new Set(), line = 0, joined = false, readySent = false, lastReport = 0;
-  s.on("connect", () => s.emit("hello", { deviceId: "bot-" + i }, () => {
+  s.on("connect", () => s.emit("hello", { browserId: "bot-" + i }, () => {
     if (!joined) s.emit("join", { nick: "bot" + (i + 1), role }, () => (joined = true));
   }));
   s.on("view", (v) => {
-    if (v.phase === "rotate" && v.rotation && v.rotation.incoming && !v.rotation.incoming.ready && !readySent) {
+    if (v.phase === "rotate" && v.rotation && v.rotation.me && !v.rotation.me.ready && !readySent) {
       readySent = true;
-      setTimeout(() => s.emit("ready", { personId: v.rotation.incoming.id }, () => {}), 1500 + Math.random() * 5000);
+      setTimeout(() => s.emit("ready", {}, () => {}), 1500 + Math.random() * 5000);
     }
     if (v.phase !== "rotate") readySent = false;
     if (v.phase !== "activity" || !v.msgs || v.paused) return;

@@ -24,7 +24,7 @@ const PUBLIC = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const SNAPSHOT = path.join(DATA_DIR, "sesion.json");
 const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-const SNAPSHOT_VERSION = 3; // los respaldos de versiones anteriores no se cargan
+const SNAPSHOT_VERSION = 4; // v4: el rol se ata a la persona (teléfono), no al asiento; los respaldos v3 no se cargan
 const FILES_DIR = path.join(DATA_DIR, "archivos"); // fotos, videos, audios… que manda el Revisor
 
 // Autoría (se muestra en la landing, al pie de cada pantalla y en la consola)
@@ -39,7 +39,13 @@ const CORE = ["modelo", "arnes"];
 // El Modelo no le escribe al Revisor ni el Revisor al Arnés: al Revisor no le llega nada del Modelo.
 const READ = { modelo: ["U", "C", "R"], arnes: ["C", "R"], revisor: ["R"] };
 const SEND_TO = { modelo: { arnes: "C", usuario: "U" }, revisor: { modelo: "R" }, arnes: {} };
-const MAX_TEAMS = 8;
+const MAX_TEAMS = 30; // ~90 personas (3 por equipo); antes 8. Puestos numerados, un teléfono por persona.
+// Gracia: durante los primeros ROT_GRACE_MS no damos por "ida" a una persona desconectada (puede ser un
+// parpadeo de red o el celular bloqueándose en plena caminata); así no se finaliza la rotación antes de tiempo.
+const ROT_GRACE_MS = Number(process.env.SEUNAIA_ROT_GRACE_MS) || 25 * 1000;
+// Tope duro de seguridad: si la rotación no se completa (p. ej. alguien online que nunca marca "ya llegué"),
+// se finaliza sola. Holgado para una sala grande buscando puestos numerados.
+const ROT_SAFETY_MS = Number(process.env.SEUNAIA_ROT_SAFETY_MS) || 180 * 1000;
 const MAX_MSG = 280;
 const BONUS = 10; // caracteres que gana el propio equipo por cada acierto del minijuego
 const MAX_QUIZ = 3; // preguntas del minijuego por persona en cada turno (entre rotaciones)
@@ -71,11 +77,12 @@ function freshState() {
     // liveSec: la conversación se cierra sola si pasa este tiempo sin mensajes
     cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true, queueSec: 60, coolSec: 60, liveSec: 60 },
     files: {}, // fileId -> { type, name, size, team, at } (el contenido está en data/archivos/<fileId>)
-    devices: {}, // deviceId -> { id, pc, role, team, personId, online }
-    persons: {}, // personId -> { id, nick, history: [], deviceId }
+    devices: {}, // seatId -> { id, pc, role, team, personId } · un ASIENTO físico numerado (pc), independiente del teléfono
+    persons: {}, // personId -> { id, nick, history: [], deviceId(asiento actual), browserId(su teléfono), online }
     teams: [], // [{ msgs, bonus, bonusLog, forgot, forgotTotal, sent }]
     nextPc: 1,
     nextId: 1,
+    nextSeatId: 1,
     timerLeft: 300,
     paused: false,
     rot: null, // { assign: {personId: deviceId}, ready: {personId: true} }
@@ -92,6 +99,11 @@ const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) {
 const devList = () => Object.values(S.devices);
 const teamDevices = (t) => devList().filter((d) => d.team === t);
 const deviceAt = (t, role) => devList().find((d) => d.team === t && d.role === role);
+// Identidad: el teléfono pertenece a la PERSONA; la vista sigue a la persona a su asiento actual (person.deviceId).
+const personByBrowser = (bid) => Object.values(S.persons).find((p) => p.browserId === bid);
+const seatOfPerson = (p) => (p ? S.devices[p.deviceId] : null);
+const seatOnline = (seat) => !!(seat && seat.personId && S.persons[seat.personId] && S.persons[seat.personId].online);
+const onlineCount = () => Object.values(S.persons).filter((p) => p.online).length;
 const limitOf = (t) => S.cfg.limit + S.teams[t].bonus;
 const costOf = (m) => m.text.length + (m.file ? FILE_COST : 0);
 const usedOf = (t) => S.teams[t].msgs.reduce((n, m) => n + costOf(m), 0);
@@ -232,28 +244,20 @@ function queueInfo(t) {
 }
 
 // ---------- Reconexión por nickname ----------
-// Si un iPad se apaga, se recarga o pierde su memoria, la persona escribe el mismo nickname
-// (en ese iPad o en otro) y el sistema le devuelve su puesto: mismo PC, rol, equipo y chat.
+// El teléfono es de la persona. Si se recarga, se queda sin batería o cambia de aparato, escribe el mismo
+// nickname desde cualquier teléfono y el sistema le re-vincula su puesto actual (asiento, rol, equipo y chat).
 const findByNick = (nick) => Object.values(S.persons).find((p) => p.nick.toLowerCase() === nick.toLowerCase());
-function moveDevice(oldId, newId) {
-  const d = S.devices[oldId];
-  delete S.devices[oldId];
-  d.id = newId;
-  S.devices[newId] = d;
-  Object.values(S.persons).forEach((p) => { if (p.deviceId === oldId) p.deviceId = newId; });
-  if (S.rot) Object.keys(S.rot.assign).forEach((pid) => { if (S.rot.assign[pid] === oldId) S.rot.assign[pid] = newId; });
-  if (S.quiz[oldId]) { S.quiz[newId] = S.quiz[oldId]; delete S.quiz[oldId]; }
-  return d;
-}
 
 // ---------- Rotación ----------
 function seated() {
-  // personas sentadas en un PC con equipo; ellas rotan entre esos PCs
-  return devList().filter((d) => d.team !== null && d.personId && S.persons[d.personId]);
+  // personas CONECTADAS, sentadas en un PC con equipo; ellas rotan entre esos PCs.
+  // Las offline no entran a la rotación (no podrían marcar "ya llegué" y la congelarían): se quedan en su puesto.
+  return devList().filter((d) => d.team !== null && d.personId && S.persons[d.personId] && S.persons[d.personId].online);
 }
 function computeAssignment(level) {
   const devs = seated();
   const persons = shuffle(devs.map((d) => S.persons[d.personId]));
+  if (!persons.length) return null; // nadie conectado para rotar: que startRotation falle (no una rotación vacía que avanza la ronda)
   const used = new Set(), res = {};
   const ok = (p, d) => {
     if (d.id === p.deviceId) return devs.length === 1;
@@ -277,7 +281,7 @@ function computeAssignment(level) {
 function startRotation() {
   const assign = computeAssignment(0) || computeAssignment(1) || computeAssignment(2);
   if (!assign) return false;
-  S.rot = { assign, ready: {} };
+  S.rot = { assign, ready: {}, since: Date.now() };
   S.phase = "rotate";
   return true;
 }
@@ -293,7 +297,11 @@ function finishRotation() {
 }
 function checkRotationDone() {
   if (S.phase !== "rotate") return;
-  if (Object.keys(S.rot.assign).every((pid) => S.rot.ready[pid])) finishRotation();
+  const graceOver = Date.now() - S.rot.since > ROT_GRACE_MS;
+  // listo cuando cada asignado marcó "ya llegué", o —pasada la gracia— lleva desconectado y no puede marcarlo.
+  // La gracia evita finalizar antes de tiempo por un parpadeo de red mientras la gente aún camina.
+  const done = Object.keys(S.rot.assign).every((pid) => S.rot.ready[pid] || (graceOver && !(S.persons[pid] && S.persons[pid].online)));
+  if (done) finishRotation();
 }
 
 // ---------- Minijuego ----------
@@ -353,14 +361,15 @@ function deviceView(dev) {
   const v = {
     ...base, registered: true,
     you: { pc: dev.pc, role: dev.role, team: dev.team, nick: person ? person.nick : null },
-    counts: { devices: devList().length, online: devList().filter((d) => d.online).length },
+    counts: { devices: devList().length, online: onlineCount() },
   };
   if (S.phase === "rotate") {
-    const outPid = dev.personId;
-    const inPid = Object.keys(S.rot.assign).find((pid) => S.rot.assign[pid] === dev.id);
+    // person-céntrico: TÚ te levantas y vas a tu nuevo asiento; cargas su rol y su historial al llegar
+    const myPid = dev.personId;
+    const target = myPid != null && S.rot.assign[myPid] ? S.devices[S.rot.assign[myPid]] : null;
     v.rotation = {
-      outgoing: outPid && S.rot.assign[outPid] ? { nick: S.persons[outPid].nick, toPc: S.devices[S.rot.assign[outPid]].pc } : null,
-      incoming: inPid ? { id: Number(inPid), nick: S.persons[inPid].nick, ready: !!S.rot.ready[inPid] } : null,
+      outgoing: target ? { nick: person ? person.nick : "", toPc: target.pc, toRole: target.role } : null,
+      me: myPid != null && S.rot.assign[myPid] ? { ready: !!S.rot.ready[myPid] } : null,
       ready: Object.keys(S.rot.ready).length, total: Object.keys(S.rot.assign).length,
     };
   }
@@ -382,11 +391,11 @@ const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, rol
 
 function adminView() {
   return {
-    kind: "admin", phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(), now: Date.now(),
+    kind: "admin", phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(), now: Date.now(), maxTeams: MAX_TEAMS,
     live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
     queue: S.queue.map((q) => ({ team: q.team, text: q.text, file: !!q.file, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
     devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
-      id: d.id, pc: d.pc, role: d.role, team: d.team, online: d.online,
+      id: d.id, pc: d.pc, role: d.role, team: d.team, online: seatOnline(d),
       nick: d.personId && S.persons[d.personId] ? S.persons[d.personId].nick : null,
     })),
     teams: S.teams.map((tm, t) => ({
@@ -395,7 +404,7 @@ function adminView() {
     })),
     rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
       nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
-      online: S.devices[did] ? S.devices[did].online : false,
+      online: !!(S.persons[pid] && S.persons[pid].online),
     })) : null,
   };
 }
@@ -460,11 +469,25 @@ const server = http.createServer((req, res) => {
     res.end(buf);
   });
 });
+// Arma el historial de la sesión (para analizar los chats). Se entrega por el socket del admin
+// (ya autenticado), no por HTTP, para no exponer el token en la URL ni en el historial del navegador.
+// Nota: incluye lo que sigue en la ventana de contexto de cada equipo; lo ya olvidado no se guarda.
+function buildExport() {
+  return {
+    exportadoAt: new Date().toISOString(), sesion: S.code, ronda: S.round, cfg: S.cfg,
+    equipos: S.teams.map((tm, t) => ({
+      equipo: t + 1, enviados: tm.sent, olvidados: tm.forgotTotal, bonus: tm.bonus,
+      mensajes: tm.msgs.map((m) => ({ id: m.id, canal: m.ch, rol: m.role, nick: m.nick, pc: m.pc, texto: m.text, archivo: m.file && S.files[m.file] ? (S.files[m.file].name || m.file) : null, at: m.at })),
+    })),
+    personas: Object.values(S.persons).map((p) => ({ nick: p.nick, historialRoles: p.history })),
+  };
+}
 // El Revisor sube un archivo (cuerpo crudo; tipo en Content-Type, nombre en X-Name, su iPad en X-Device)
 function upload(req, res) {
   const answer = (code, body) => { if (res.headersSent) return; res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" }); res.end(JSON.stringify(body)); };
   const fail = (code, error) => { answer(code, { error }); req.resume(); };
-  const dev = S.devices[String(req.headers["x-device"] || "")];
+  const person = personByBrowser(cleanText(String(req.headers["x-device"] || ""), 64));
+  const dev = seatOfPerson(person);
   if (!dev || dev.role !== "revisor" || dev.team === null || S.phase !== "activity") return fail(403, "Solo el Revisor puede mandar archivos durante la actividad.");
   const type = String(req.headers["content-type"] || "application/octet-stream").split(";")[0].trim().toLowerCase();
   if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(type)) return fail(400, "Tipo de archivo no válido.");
@@ -523,7 +546,7 @@ function sync() {
     const admin = adminView();
     for (const [, sock] of io.sockets.sockets) {
       if (sock.data.admin) sock.emit("view", admin);
-      else if (sock.data.deviceId !== undefined) sock.emit("view", deviceView(S.devices[sock.data.deviceId]));
+      else if (sock.data.browserId !== undefined) sock.emit("view", deviceView(seatOfPerson(personByBrowser(sock.data.browserId))));
     }
     saveSoon();
   });
@@ -554,7 +577,7 @@ function loadSnapshot() {
       if (raw.version === SNAPSHOT_VERSION && Date.now() - raw.savedAt <= SNAPSHOT_MAX_AGE_MS) {
         const fresh = freshState();
         S = { ...fresh, ...raw.state, cfg: { ...fresh.cfg, ...raw.state.cfg } };
-        devList().forEach((d) => (d.online = false));
+        Object.values(S.persons).forEach((p) => (p.online = false));
         console.log(`Sesión ${S.code} recuperada del respaldo (${devList().length} dispositivos).`);
         return;
       }
@@ -567,37 +590,41 @@ function loadSnapshot() {
 io.on("connection", (sock) => {
   const reply = (cb, payload) => { if (typeof cb === "function") cb(payload); };
   const isAdmin = () => sock.data.admin === true;
-  const myDevice = () => S.devices[sock.data.deviceId];
+  const myPerson = () => personByBrowser(sock.data.browserId);
+  const myDevice = () => seatOfPerson(myPerson()); // el asiento que ocupa ahora la persona de este teléfono
 
-  sock.on("hello", ({ deviceId } = {}, cb) => {
-    const id = cleanText(deviceId, 64);
+  sock.on("hello", ({ browserId, deviceId } = {}, cb) => {
+    const id = cleanText(browserId || deviceId, 64); // deviceId: alias de compatibilidad (bots/clientes viejos)
     if (!id) return reply(cb, { ok: false });
-    sock.data.deviceId = id;
-    const dev = S.devices[id];
-    if (dev) dev.online = true;
+    sock.data.browserId = id;
+    const person = personByBrowser(id);
+    if (person) person.online = true;
     reply(cb, { ok: true });
-    sock.emit("view", deviceView(dev));
-    if (dev) syncAdmins();
+    sock.emit("view", deviceView(seatOfPerson(person)));
+    if (person) syncAdmins();
   });
 
-  // Volver al puesto con el mismo nickname (también se intenta solo desde "join")
+  // Volver al puesto con el mismo nickname (también se intenta solo desde "join").
+  // Ya no se mueve el asiento: solo se re-vincula el teléfono (browserId) a la persona.
   function reclaim(nick) {
-    const id = sock.data.deviceId;
+    const id = sock.data.browserId;
     const p = findByNick(nick);
     if (!p) return { error: `No hay nadie jugando como "${nick}". Revisa cómo lo escribiste.` };
-    const dev = S.devices[p.deviceId];
-    if (!dev) return { error: "Tu puesto ya no existe. Pide al admin que te agregue de nuevo." };
-    if (dev.id === id) { dev.online = true; return { ok: true, reclaimed: true, pc: dev.pc }; }
-    const other = [...io.sockets.sockets.values()].some((s) => s !== sock && s.data.deviceId === dev.id);
-    if (dev.online && other) return { error: `"${p.nick}" está conectado en el PC ${dev.pc}. Si ese iPad se apagó o se trabó, espera unos segundos o pide al admin que lo libere.` };
-    if (S.devices[id]) return { error: "Este iPad ya tiene otro puesto. Usa uno libre o pide ayuda al admin." };
-    moveDevice(dev.id, id);
-    dev.online = true;
-    return { ok: true, reclaimed: true, pc: dev.pc };
+    const seat = S.devices[p.deviceId];
+    if (!seat) return { error: "Tu puesto ya no existe. Pide al admin que te agregue de nuevo." };
+    if (p.browserId === id) { p.online = true; return { ok: true, reclaimed: true, pc: seat.pc }; }
+    // este teléfono ya es de OTRA persona: no crear un segundo vínculo (si no, un browserId quedaría apuntando a dos personas)
+    const mine = personByBrowser(id);
+    if (mine && mine !== p) return { error: `Este teléfono ya está jugando como "${mine.nick}". Pide al admin que lo libere antes de entrar con otro nickname.` };
+    const other = [...io.sockets.sockets.values()].some((s) => s !== sock && s.data.browserId === p.browserId);
+    if (p.online && other) return { error: `"${p.nick}" está conectado en otro dispositivo (PC ${seat.pc}). Si ese teléfono se apagó o se trabó, espera unos segundos o pide al admin que lo libere.` };
+    p.browserId = id; // este teléfono pasa a ser el de la persona
+    p.online = true;
+    return { ok: true, reclaimed: true, pc: seat.pc };
   }
   sock.on("reclaim", ({ nick } = {}, cb) => {
     nick = cleanText(nick, 16);
-    if (!sock.data.deviceId) return reply(cb, { error: "Recarga la página e inténtalo de nuevo." });
+    if (!sock.data.browserId) return reply(cb, { error: "Recarga la página e inténtalo de nuevo." });
     if (!nick) return reply(cb, { error: "Escribe el nickname con el que estabas jugando." });
     const r = reclaim(nick);
     reply(cb, r);
@@ -605,22 +632,23 @@ io.on("connection", (sock) => {
   });
 
   sock.on("join", ({ nick, role } = {}, cb) => {
-    const id = sock.data.deviceId;
+    const id = sock.data.browserId;
     nick = cleanText(nick, 16);
     if (!id) return reply(cb, { error: "Recarga la página e inténtalo de nuevo." });
     if (!nick) return reply(cb, { error: "Escribe tu nickname para entrar." });
     if (!ROLES.includes(role)) return reply(cb, { error: "Escoge un rol." });
-    if (S.devices[id]) return reply(cb, { error: "Este PC ya está registrado." });
+    if (personByBrowser(id)) return reply(cb, { error: "Este teléfono ya está jugando." });
     if (findByNick(nick)) {
-      // el nickname ya existe: si su iPad está desconectado, es la misma persona volviendo
+      // el nickname ya existe: si su teléfono está desconectado, es la misma persona volviendo
       const r = reclaim(nick);
       if (r.ok) { reply(cb, r); return sync(); }
       return reply(cb, { error: r.error.startsWith(`"`) ? r.error : `El nickname "${nick}" ya está en uso. Escoge otro.` });
     }
     const pid = S.nextId++;
-    S.persons[pid] = { id: pid, nick, history: [role], deviceId: id };
-    const dev = { id, pc: S.nextPc++, role, team: null, personId: pid, online: true };
-    S.devices[id] = dev;
+    const seatId = "seat-" + S.nextSeatId++;
+    S.persons[pid] = { id: pid, nick, history: [role], deviceId: seatId, browserId: id, online: true };
+    const dev = { id: seatId, pc: S.nextPc++, role, team: null, personId: pid };
+    S.devices[seatId] = dev;
     if (S.phase === "lobby") placeInTeam(dev);
     reply(cb, { ok: true });
     sync();
@@ -695,10 +723,11 @@ io.on("connection", (sock) => {
     sync();
   });
 
-  sock.on("ready", ({ personId } = {}, cb) => {
-    const dev = myDevice();
-    if (!dev || S.phase !== "rotate" || S.rot.assign[personId] !== dev.id) return reply(cb, { error: "Este no es tu PC." });
-    S.rot.ready[personId] = true;
+  sock.on("ready", (_data = {}, cb) => {
+    // la persona de este teléfono confirma que llegó a su nuevo asiento
+    const p = myPerson();
+    if (!p || S.phase !== "rotate" || !(p.id in S.rot.assign)) return reply(cb, { error: "Ahora no toca marcar listo." });
+    S.rot.ready[p.id] = true;
     reply(cb, { ok: true });
     checkRotationDone();
     sync();
@@ -756,12 +785,16 @@ io.on("connection", (sock) => {
   });
   // cierra la conversación abierta y pasa al siguiente Modelo de la cola
   adminOn("admin:endLive", () => { if (!S.live) return "No hay ninguna conversación abierta."; endLive(); });
-  // suelta un puesto trabado para que su persona vuelva desde otro iPad con su nickname
+  // suelta un puesto trabado para que su persona vuelva desde otro teléfono con su nickname
   adminOn("admin:release", ({ deviceId }) => {
     const dev = S.devices[deviceId];
     if (!dev) return "Ese dispositivo ya no existe.";
-    for (const s of io.sockets.sockets.values()) if (s.data.deviceId === dev.id) { s.data.deviceId = undefined; s.emit("released"); }
-    dev.online = false;
+    const p = dev.personId && S.persons[dev.personId];
+    if (p) {
+      for (const s of io.sockets.sockets.values()) if (s.data.browserId === p.browserId) { s.data.browserId = undefined; s.emit("released"); }
+      p.online = false;
+      p.browserId = null; // desvincula el teléfono viejo: si reconecta no re-ocupa el puesto; la persona vuelve con su nickname
+    }
   });
   adminOn("admin:reshuffle", () => { if (S.phase !== "lobby") return "Solo antes de iniciar."; reshuffleTeams(); });
   adminOn("admin:assign", ({ deviceId, team, role }) => {
@@ -771,7 +804,7 @@ io.on("connection", (sock) => {
     if (team !== undefined) {
       const target = team === null || team === "" ? null : Number(team);
       if (target !== null && (target < 0 || target > S.teams.length)) return "Equipo inválido.";
-      if (target === S.teams.length) { if (S.teams.length >= MAX_TEAMS) return "Máximo 8 equipos."; S.teams.push(newTeam()); }
+      if (target === S.teams.length) { if (S.teams.length >= MAX_TEAMS) return `Máximo ${MAX_TEAMS} equipos.`; S.teams.push(newTeam()); }
       const other = target === null ? null : deviceAt(target, dev.role);
       if (other && other !== dev) other.team = dev.team; // intercambio
       dev.team = target;
@@ -817,17 +850,29 @@ io.on("connection", (sock) => {
   adminOn("admin:forceResume", () => { if (S.phase !== "rotate") return; Object.keys(S.rot.assign).forEach((pid) => (S.rot.ready[pid] = true)); finishRotation(); });
   adminOn("admin:end", () => { S.phase = "end"; S.rot = null; S.paused = false; S.queue = []; S.live = null; });
   adminOn("admin:reset", () => { S = freshState(); wipeFiles(); });
+  // export por el socket autenticado (no HTTP): evita el token en la URL; devuelve el historial en el ack
+  sock.on("admin:export", (_data = {}, cb) => {
+    if (!isAdmin()) return reply(cb, { error: "Solo el admin." });
+    reply(cb, { ok: true, data: buildExport() });
+  });
 
   sock.on("disconnect", () => {
-    const dev = myDevice();
-    if (!dev) return;
-    const stillHere = [...io.sockets.sockets.values()].some((s) => s !== sock && s.data.deviceId === dev.id);
-    if (!stillHere) { dev.online = false; syncAdmins(); }
+    const p = myPerson();
+    if (!p) return;
+    const stillHere = [...io.sockets.sockets.values()].some((s) => s !== sock && s.data.browserId === sock.data.browserId);
+    if (!stillHere) { p.online = false; syncAdmins(); }
   });
 });
 
 // ---------- Reloj: rotación y cola del Usuario ----------
 setInterval(() => {
+  if (S.phase === "rotate") {
+    if (!S.rot) return;
+    checkRotationDone(); // alguien asignado se desconectó: finaliza sin esperarlo
+    if (S.phase === "rotate" && Date.now() - S.rot.since > ROT_SAFETY_MS) finishRotation(); // tope duro de seguridad
+    if (S.phase !== "rotate") sync(); // la rotación terminó: avisar a todos
+    return;
+  }
   if (S.phase !== "activity" || S.paused) return;
   let all = liveTimeout() || serveQueue();
   if (autoRot()) {

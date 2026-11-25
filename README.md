@@ -2,7 +2,7 @@
 
 Aplicación de chat rooms para la experiencia de CREA (Facultad de Ingeniería, Uniandes): grupos de 3 personas se comportan como un agente de IA (Modelo, Arnés y Revisor) con memoria limitada, mientras construyen algo físico.
 
-Un **PC de la universidad** hace de servidor central. Los iPads o PCs de la sala solo abren una dirección en el navegador; no se instala nada en ellos.
+Un **PC de la universidad** hace de servidor central. Cada persona entra desde **su propio celular** (o un iPad de la sala): solo abren una dirección en el navegador; no se instala nada en ellos. El rol viaja con la persona; los **puestos de la sala van numerados** y, al rotar, el celular indica a qué puesto ir.
 
 **Autoría:** David Octavio Ibarra, Sebastián Suárez, Francisco Santamaría, Ángel Peñaranda y el equipo CREA (Facultad de Ingeniería, Universidad de los Andes).
 
@@ -96,12 +96,12 @@ El hotspot de Windows tiene límites:
 ## Cómo corre la actividad
 
 1. **Antes**: el admin abre `/admin`, entra con la clave y define el límite de contexto (caracteres), si se borra el mensaje completo o letra por letra, el tiempo entre rotaciones, la espera mínima de la **cola** y el **enfriamiento** del Modelo (ver más abajo).
-2. **Llegada**: cada persona, en el iPad de su mesa, escribe su nickname y escoge el rol de esa mesa. El sistema numera el iPad (PC 1, PC 2…) y arma los equipos solo, con una persona por rol (máximo 8 equipos). Mientras tanto ven la pista de su rol y "esperando jugadores".
+2. **Llegada**: cada persona, en su propio celular, escribe su nickname y escoge el rol de su puesto. El sistema numera el puesto (PC 1, PC 2…) y arma los equipos solo, con una persona por rol (máximo 30 equipos ≈ 90 personas). Mientras tanto ven la pista de su rol y "esperando jugadores".
 3. **Ajustes**: en la tabla del admin se cambia el rol o el equipo de cualquier iPad; si el puesto ya está ocupado, se intercambian. Para iniciar, cada equipo necesita al menos Modelo y Arnés; sin Revisor nadie le da retroalimentación al Modelo.
 4. **Iniciar actividad** y **enviar el prompt** a todos los Modelos o a un solo equipo.
 5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso.
 6. **Minijuego**: al lado del chat hay preguntas cortas, **máximo 3 por persona en cada turno** (se renuevan con cada rotación). Cada acierto da **+10 caracteres al propio equipo**. Además del banco fijo, el servidor genera preguntas con números y palabras al azar (cuentas de contexto, la cola, quién habla con quién…), así casi nunca se repiten.
-7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), cada iPad muestra en blanco "nick, levántate y ve al PC X" y en grande **ESTE ES EL PC Y**. El sistema escoge un PC al azar con un rol que esa persona no ha hecho. Quien llega toca **¡LISTO!** y, cuando todos están listos, la actividad sigue. El rol y el equipo están atados al iPad, no a la persona.
+7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), el celular de cada persona le muestra en blanco "levántate y ve al **PC X**", su **nuevo rol** y la frase de ese rol. El sistema escoge un puesto con un rol que esa persona no ha hecho. Al llegar al puesto toca **¡YA LLEGUÉ!** y, cuando todos están listos, la actividad sigue y el celular carga el chat de ese puesto. El rol y el equipo viajan con la persona (en su celular); el **puesto es físico y numerado**. El emparejamiento Revisor–Arnés es una regla que se le dice a los participantes, no la impone el sistema.
 8. **Terminar** muestra un resumen por equipo. **Nueva sesión** borra todo.
 
 ### Canales y reglas de cada rol
@@ -147,8 +147,8 @@ Varios equipos juegan a la vez y el Usuario atiende a **un Modelo a la vez**:
 
 ## Si algo falla
 
-- **Un iPad se recarga o se desconecta**: vuelve a su mismo PC y rol, porque el iPad se recuerda en su navegador. No uses navegación privada.
-- **Un iPad se apaga, se borra o hay que cambiarlo**: en cualquier iPad libre, la persona escribe su **mismo nickname** y toca *Volver a mi puesto con este nickname* (o cualquier rol). Recupera su PC, rol, equipo y chat. Si el sistema dice que ese nickname sigue conectado (el iPad viejo quedó trabado), el admin toca **Liberar** en la tabla de dispositivos y la persona vuelve a intentarlo.
+- **Un celular se recarga o se desconecta**: vuelve a su mismo puesto y rol, porque el celular se recuerda en su navegador. No uses navegación privada.
+- **Un celular se apaga, se queda sin batería o hay que cambiarlo**: desde cualquier celular, la persona escribe su **mismo nickname** y toca *Volver a mi puesto con este nickname* (o cualquier rol). Recupera su PC, rol, equipo y chat. Si el sistema dice que ese nickname sigue conectado (el celular viejo quedó trabado), el admin toca **Liberar** en la tabla de dispositivos y la persona vuelve a intentarlo.
 - **El servidor se cierra**: al volver a arrancarlo recupera la sesión desde `data/sesion.json` (respaldos de menos de 6 horas). Para empezar de cero: `node server.js --nueva`, o "Nueva sesión" en el panel.
 
 ## Ensayar sin gente
@@ -179,6 +179,7 @@ public/fx.js       fondo interactivo de caracteres que reacciona al puntero
 public/assets/     logos de CREA y Uniandes
 lib/red.js         nombre seunaia.local (mDNS) y códigos QR
 tools/bots.js      jugadores de prueba
+tools/carga.js     prueba de carga (muchos jugadores + rotaciones)
 tools/hotspot.ps1  enciende/apaga la red WiFi propia del PC
 tools/firewall.ps1 abre el puerto en el firewall de Windows
 tools/*.ps1, *.js  descargas (Node.js, tipografías) y empaquetado del zip
@@ -188,8 +189,17 @@ test/smoke.js      prueba automática del flujo completo
 data/              respaldo de la sesión (se crea solo)
 ```
 
+## Exportar el historial
+
+En el panel admin (en vivo o en el resumen) el botón **Descargar historial** baja un JSON con los chats de cada equipo, los roles por los que pasó cada persona y la config. Incluye lo que sigue en la ventana de contexto de cada equipo; lo que ya se olvidó no se guarda. La descarga va por el socket ya autenticado del admin (no expone ninguna clave en la URL).
+
+## Dos salas simultáneas (pendiente, fuera de esta versión)
+
+Hoy el servidor sostiene **una** sala. Para dos salas al mismo tiempo, la vía de menor riesgo es correr **dos procesos** en dos puertos con carpetas de datos separadas (p. ej. `PORT=80` y `PORT=81` con `DATA` distinta). Queda para una siguiente iteración.
+
 ## Pendiente para la siguiente versión
 
+- **Dos salas simultáneas** (ver arriba).
+- Pre-crear la grilla de puestos numerada por equipo desde el admin (hoy la numeración es por orden de llegada).
 - Modo de contexto **por canal** (la especificación lo menciona; hoy solo existe "global por equipo").
-- Exportar el historial de la sesión (hoy no se guarda nada después de "Nueva sesión").
-- Probar en los iPads reales de la sala y con la red de la universidad.
+- Probar con celulares reales de la sala y con la red de la universidad.

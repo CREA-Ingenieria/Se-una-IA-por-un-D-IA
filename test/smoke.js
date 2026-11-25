@@ -19,14 +19,14 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
     const s = io(URL, { forceNew: true });
     s.last = null; s.on("view", (v) => (s.last = v));
     await new Promise((r) => s.on("connect", r));
-    await call(s, "hello", { deviceId: "ipad-" + i });
+    await call(s, "hello", { browserId: "ipad-" + i });
     const r = await call(s, "join", { nick: "p" + i, role: roles[i] });
     check(r.ok, `iPad ${i} entra como ${roles[i]}`);
     pads.push(s);
   }
   const otroThinking = io(URL, { forceNew: true });
   await new Promise((r) => otroThinking.on("connect", r));
-  await call(otroThinking, "hello", { deviceId: "ipad-thinking" });
+  await call(otroThinking, "hello", { browserId: "ipad-thinking" });
   check((await call(otroThinking, "join", { nick: "tk", role: "thinking" })).error, "el rol Thinking ya no existe");
   otroThinking.close();
   const admin = io(URL, { forceNew: true });
@@ -162,7 +162,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   // --- reconexión por nickname ---
   const otro = io(URL, { forceNew: true });
   await new Promise((r) => otro.on("connect", r));
-  await call(otro, "hello", { deviceId: "otro-ipad" });
+  await call(otro, "hello", { browserId: "otro-ipad" });
   check((await call(otro, "join", { nick: "P1", role: "modelo" })).error, "no se puede usar el nickname de alguien conectado");
   const pc5 = pads[5].last.you.pc;
   pads[5].close();
@@ -170,7 +170,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   const nuevo = io(URL, { forceNew: true });
   nuevo.last = null; nuevo.on("view", (v) => (nuevo.last = v));
   await new Promise((r) => nuevo.on("connect", r));
-  await call(nuevo, "hello", { deviceId: "ipad-reemplazo" });
+  await call(nuevo, "hello", { browserId: "ipad-reemplazo" });
   const rc = await call(nuevo, "reclaim", { nick: "p5" });
   await wait(100);
   check(rc.ok && nuevo.last.you.pc === pc5 && nuevo.last.you.nick === "p5", "p5 vuelve a su PC " + pc5 + " desde otro iPad");
@@ -179,17 +179,18 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
 
   check((await call(admin, "admin:rotate", {})).ok, "admin dispara la rotación");
   await wait(100);
+  // antes de rotar: cada persona (por su nick) está en un puesto y un rol
+  const before = {};
+  pads.forEach((p) => (before[p.last.you.nick] = { pc: p.last.you.pc, role: p.last.you.role }));
   const rots = pads.map((p) => p.last.rotation);
-  check(rots.every((x) => x && x.outgoing && x.incoming), "cada PC dice a dónde ir y quién llega");
-  const before = pads.map((p) => p.last.you.role);
-  for (let i = 0; i < pads.length; i++) await call(pads[i], "ready", { personId: rots[i].incoming.id });
+  check(rots.every((x) => x && x.outgoing && x.me), "cada teléfono dice a dónde ir y el nuevo rol");
+  check(rots.every((x) => x.outgoing.toRole && x.outgoing.toPc), "la rotación trae rol y puesto nuevos");
+  for (let i = 0; i < pads.length; i++) await call(pads[i], "ready", {});
   await wait(150);
   check(pads[0].last.phase === "activity", "con todos listos la actividad sigue");
-  const moved = pads.every((p, i) => p.last.you.nick !== "p" + i);
-  check(moved, "todas las personas cambiaron de PC");
-  const roleOfNick = {};
-  pads.forEach((p) => (roleOfNick[p.last.you.nick] = p.last.you.role));
-  check(Object.entries(roleOfNick).every(([nick, role]) => role !== before[+nick.slice(1)]), "nadie repite rol");
+  // cada persona conserva su nick pero cambió de asiento (PC) y de rol
+  check(pads.every((p) => p.last.you.pc !== before[p.last.you.nick].pc), "cada persona cambió de puesto (PC)");
+  check(pads.every((p) => p.last.you.role !== before[p.last.you.nick].role), "nadie repite rol");
   check(pads.every((p) => p.last.question && p.last.question.n === 1), "tras rotar, el minijuego vuelve a tener 3 preguntas");
   pads.forEach((p) => p.close()); admin.close();
   server.close();
