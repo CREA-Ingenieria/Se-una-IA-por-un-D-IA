@@ -2,6 +2,7 @@
 // Uso: npm test
 process.env.PORT = process.env.PORT || "3999";
 process.env.SEUNAIA_SIN_MDNS = "1";
+process.env.SEUNAIA_READY_COOLDOWN_MS = "0"; // el smoke marca listo al instante; el cooldown se prueba en regresion
 process.argv.push("--nueva");
 const { server, makeQuestion } = require("../server.js");
 const { io } = require("socket.io-client");

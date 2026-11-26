@@ -243,13 +243,14 @@ function vChat(v) {
     const off = dis || (blocked ? " disabled" : "");
     const hold = blocked ? (u.queue ? "Ya estás en la cola del Usuario…" : "Espera para volver a escribirle al Usuario…") : place;
     const many = Object.keys(dests).length > 1;
-    compose = `${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
+    compose = `${r === "revisor" && v.reviewTarget ? `<div class="reviewbar">👁️ Revisa al <b>Arnés ${esc(v.reviewTarget)}</b> y descríbele al Modelo lo que hace</div>` : ""}${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
         ${Object.entries(dests).map(([k, d]) => `<button type="button" class="seg${to === k ? " on" : ""}" aria-pressed="${to === k}" data-act="to" data-to="${k}">${d[1]}</button>`).join("")}</div>
       <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${hold}" aria-label="Mensaje para ${name}"${off}>
         ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto, video, audio o archivo a ${name}" title="Mandar foto, video, audio o archivo">${camIcon}</label>
         <input type="file" id="photo" accept="image/*,video/*,audio/*,application/pdf" hidden${dis}>` : ""}
         <button class="btn" style="background:${to === "usuario" ? RC.profesor : RC[r]};color:${to === "usuario" ? "#000" : RTX[r]}"${off}>${to === "usuario" && !live ? "HACER FILA" : "ENVIAR"}</button></form>`;
-  } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>`;
+  } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>
+      <button type="button" class="btn" style="background:${RC.arnes};color:#000;width:100%;margin-top:8px;min-height:50px;font-weight:700" data-act="deliver"${dis}>🏁 ENTREGAR · avisar que el trabajo está listo</button>`;
   const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}: ${esc(PHRASE[r])}.</b> ${HINT[r]}</p></div>` : "";
   // la pista y el aviso de olvido van en contenedores fijos, para que el resto de la pantalla no se mueva al actualizarla
   return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">${esc(whereL(v.you.where))}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}<div class="slot-hint">${hint}</div>
@@ -292,7 +293,9 @@ function vRotate(v) {
     : `<span class="muted" style="font-size:16px">Espera la siguiente ronda…</span>`}
     ${R.me ? (R.me.ready
       ? `<span class="pill" style="background:var(--t);color:#000;height:44px;font-size:14px">✓ Estás en tu puesto</span>`
-      : `<button class="btn white" style="min-width:240px;min-height:56px;font-size:20px;animation:pulse 2s ease-in-out infinite" data-act="ready">¡YA LLEGUÉ A MI PUESTO!</button>`) : ""}
+      : (secsTo(R.me.readyAt) > 0
+        ? `<button class="btn white" style="min-width:240px;min-height:56px;font-size:18px;opacity:.5" disabled>Camina a tu puesto… ${cd(R.me.readyAt)}</button>`
+        : `<button class="btn white" style="min-width:240px;min-height:56px;font-size:20px;animation:pulse 2s ease-in-out infinite" data-act="ready">¡YA LLEGUÉ A MI PUESTO!</button>`)) : ""}
     <span class="muted" style="font-size:12px;font-weight:600;letter-spacing:.2em">LISTOS <b class="dots" style="font-size:22px;color:#fff">${R.ready}/${R.total}</b></span>
   </div>`;
 }
@@ -446,7 +449,7 @@ function vUsuario(v) {
   const queue = v.queue.length ? `<ol class="queue">${v.queue.map((q, i) => {
     const s = secsTo(q.readyAt);
     const st = s > 0 ? `espera mínima ${mmss(s)}` : i === 0 && v.live ? "listo · cuando termines" : i === 0 ? "pasa ya" : "listo · espera su turno";
-    return `<li><b>Equipo ${q.team + 1}</b> <span class="muted">${esc(q.nick)}</span> <span class="qst">${st}</span><span class="qtx">${q.file ? "[archivo] " : ""}${esc(q.text)}</span></li>`;
+    return `<li><b>Equipo ${q.team + 1}</b> <span class="muted">${esc(q.nick)}</span> <span class="qst">${st}</span><span class="qtx">${q.file ? "[archivo] " : ""}${esc(q.text)}</span>${!v.live ? `<button class="btn sm" style="background:var(--y);color:#000;margin-top:6px;align-self:flex-start" data-act="serveNow" data-t="${q.team}">Atender ahora</button>` : ""}</li>`;
   }).join("")}</ol>` : `<p class="muted" style="margin:0;font-size:13px">Ningún Modelo esperando.</p>`;
   const qcard = `<div class="card qcard"><span class="ctlt">COLA DE MODELOS (${v.queue.length})</span>${queue}
     <p class="muted" style="margin:0;font-size:12px">Cada Modelo espera al menos ${v.cfg.queueSec ? mmss(v.cfg.queueSec) : "0:00"} y a que termines con los que llegaron antes. Después de hablar contigo espera ${v.cfg.coolSec ? mmss(v.cfg.coolSec) : "0:00"} para volver a escribirte. Si nadie escribe en ${mmss(v.cfg.liveSec)}, la conversación se cierra sola.</p></div>`;
@@ -542,6 +545,8 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "to") { L.to = el.dataset.to; render(); $("#msg") && !$("#msg").disabled && $("#msg").focus(); return; }
   if (act === "endLive") { await emit("admin:endLive"); return; }
+  if (act === "deliver") { const r = await emit("arnes:deliver"); if (r.ok) toast("Avisaste al Modelo que el trabajo está listo."); return; }
+  if (act === "serveNow") { const r = await emit("admin:serveNow", { team: +el.dataset.t }); if (r.ok) toast("Conversación abierta con ese Modelo."); return; }
   if (act === "export") {
     const r = await emit("admin:export");
     if (r.ok && r.data) {

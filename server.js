@@ -49,6 +49,9 @@ const ROT_GRACE_MS = Number(process.env.SEUNAIA_ROT_GRACE_MS) || 25 * 1000;
 // Tope duro de seguridad: si la rotación no se completa (p. ej. alguien online que nunca marca "ya llegué"),
 // se finaliza sola. Holgado para una sala grande buscando puestos numerados.
 const ROT_SAFETY_MS = Number(process.env.SEUNAIA_ROT_SAFETY_MS) || 180 * 1000;
+// El botón "¡Ya llegué!" no se puede tocar hasta pasado este tiempo desde que arranca la rotación,
+// para que la persona camine a su puesto en vez de marcar listo al instante sin moverse.
+const READY_COOLDOWN_MS = process.env.SEUNAIA_READY_COOLDOWN_MS !== undefined ? Number(process.env.SEUNAIA_READY_COOLDOWN_MS) : 6 * 1000;
 const MAX_MSG = 280;
 const BONUS = 10; // caracteres que gana el propio equipo por cada acierto del minijuego
 const MAX_QUIZ = 3; // preguntas del minijuego por persona en cada turno (entre rotaciones)
@@ -98,7 +101,7 @@ function freshState() {
   };
 }
 // coolFrom: cuándo terminó su última conversación con el Usuario (el enfriamiento se calcula con la config actual)
-function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolFrom: 0 }; }
+function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolFrom: 0, deliverAt: 0 }; }
 
 const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const devList = () => Object.values(S.devices);
@@ -109,6 +112,8 @@ const personByBrowser = (bid) => Object.values(S.persons).find((p) => p.browserI
 const seatOfPerson = (p) => (p ? S.devices[p.deviceId] : null);
 const seatOnline = (seat) => !!(seat && seat.personId && S.persons[seat.personId] && S.persons[seat.personId].online);
 const onlineCount = () => Object.values(S.persons).filter((p) => p.online).length;
+// ¿hay alguna persona SENTADA (con puesto) conectada? Para no auto-rotar en un break aunque quede algún espectador suelto.
+const anySeatedOnline = () => seated().some((d) => S.persons[d.personId] && S.persons[d.personId].online);
 const limitOf = (t) => S.cfg.limit + S.teams[t].bonus;
 const costOf = (m) => m.text.length + (m.file ? FILE_COST : 0);
 const usedOf = (t) => S.teams[t].msgs.reduce((n, m) => n + costOf(m), 0);
@@ -128,14 +133,21 @@ function axisLabel(style, idx) {
   do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
   return s;
 }
-// { label, row, col, pc }. Sin tablero (cols=0) devuelve "PC N" para no romper el modo actual.
-function seatWhere(pc) {
+// Nomenclatura de puestos. Por defecto: letra del rol + número de equipo (M1 = Modelo del equipo 1,
+// A1 su Arnés, R1 su Revisor). Si el admin define columnas (board.cols≥1), usa fila+columna (A1, B3…).
+const ROLE_LETTER = { modelo: "M", arnes: "A", revisor: "R" };
+function seatWhere(dev) {
+  if (!dev) return { label: "—", row: null, col: null, pc: null };
   const b = S.cfg.board || {};
-  if (!b.cols || b.cols < 1) return { label: "PC " + pc, row: null, col: null, pc };
-  const i = pc - 1, r = Math.floor(i / b.cols), c = i % b.cols;
-  const row = axisLabel(b.rowStyle, r), col = axisLabel(b.colStyle, c);
-  const sep = b.rowStyle === b.colStyle ? "-" : ""; // evita ambigüedad cuando ambos son números ("2-3" en vez de "23")
-  return { label: row + sep + col, row, col, pc };
+  if (b.cols && b.cols >= 1) {
+    const i = dev.pc - 1, r = Math.floor(i / b.cols), c = i % b.cols;
+    const row = axisLabel(b.rowStyle, r), col = axisLabel(b.colStyle, c);
+    const sep = b.rowStyle === b.colStyle ? "-" : ""; // evita ambigüedad cuando ambos son números ("2-3" en vez de "23")
+    return { label: row + sep + col, row, col, pc: dev.pc };
+  }
+  const letter = ROLE_LETTER[dev.role] || "P";
+  const num = dev.team != null ? dev.team + 1 : dev.pc; // una silla por rol por equipo → el número = el equipo
+  return { label: letter + num, row: null, col: null, pc: dev.pc };
 }
 const cleanText = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -282,6 +294,7 @@ function computeAssignment(level) {
   const persons = shuffle(devs.map((d) => S.persons[d.personId]));
   if (!persons.length) return null; // nadie conectado para rotar: que startRotation falle (no una rotación vacía que avanza la ronda)
   const used = new Set(), res = {};
+  let budget = 200000; // evita el backtracking exponencial al probar infactibilidad en salas grandes (90 personas)
   const ok = (p, d) => {
     if (d.id === p.deviceId) return devs.length === 1;
     if (level === 0) return !p.history.includes(d.role);
@@ -289,6 +302,7 @@ function computeAssignment(level) {
     return true;
   };
   const bt = (i) => {
+    if (budget-- <= 0) return false; // sin presupuesto: que caiga al siguiente nivel (el nivel 2 siempre encuentra un derangement)
     if (i === persons.length) return true;
     const p = persons[i];
     for (const d of shuffle(devs)) {
@@ -317,6 +331,7 @@ function finishRotation() {
     d.personId = p.id; p.deviceId = d.id; p.history.push(d.role);
   });
   S.rot = null; S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.round++; S.quiz = {};
+  S.teams.forEach((t) => (t.deliverAt = 0)); // nueva ronda: el Arnés puede volver a entregar
 }
 function checkRotationDone() {
   if (S.phase !== "rotate") return;
@@ -383,7 +398,7 @@ function deviceView(dev) {
   const person = S.persons[dev.personId];
   const v = {
     ...base, registered: true,
-    you: { pc: dev.pc, role: dev.role, team: dev.team, nick: person ? person.nick : null, where: seatWhere(dev.pc) },
+    you: { pc: dev.pc, role: dev.role, team: dev.team, nick: person ? person.nick : null, where: seatWhere(dev) },
     counts: { devices: devList().length, online: onlineCount() },
   };
   if (S.phase === "rotate") {
@@ -391,8 +406,8 @@ function deviceView(dev) {
     const myPid = dev.personId;
     const target = myPid != null && S.rot.assign[myPid] ? S.devices[S.rot.assign[myPid]] : null;
     v.rotation = {
-      outgoing: target ? { nick: person ? person.nick : "", toPc: target.pc, toRole: target.role, where: seatWhere(target.pc) } : null,
-      me: myPid != null && S.rot.assign[myPid] ? { ready: !!S.rot.ready[myPid] } : null,
+      outgoing: target ? { nick: person ? person.nick : "", toPc: target.pc, toRole: target.role, where: seatWhere(target) } : null,
+      me: myPid != null && S.rot.assign[myPid] ? { ready: !!S.rot.ready[myPid], readyAt: S.rot.since + READY_COOLDOWN_MS } : null,
       ready: Object.keys(S.rot.ready).length, total: Object.keys(S.rot.assign).length,
     };
   }
@@ -404,6 +419,8 @@ function deviceView(dev) {
     if (dev.role === "modelo") {
       v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: coolUntilOf(t), waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec };
     }
+    // el Revisor ve a quién debe revisar: el Arnés de su equipo (su id, p. ej. A1)
+    if (dev.role === "revisor") { const a = deviceAt(t, "arnes"); v.reviewTarget = a ? seatWhere(a).label : null; }
     if (S.phase === "activity") { v.question = questionFor(dev.id); v.quizMax = MAX_QUIZ; v.quizBonus = BONUS; }
   }
   return v;
@@ -418,7 +435,7 @@ function adminView() {
     live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
     queue: S.queue.map((q) => ({ team: q.team, text: q.text, file: !!q.file, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
     devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
-      id: d.id, pc: d.pc, role: d.role, team: d.team, online: seatOnline(d), where: seatWhere(d.pc),
+      id: d.id, pc: d.pc, role: d.role, team: d.team, online: seatOnline(d), where: seatWhere(d),
       nick: d.personId && S.persons[d.personId] ? S.persons[d.personId].nick : null,
     })),
     teams: S.teams.map((tm, t) => ({
@@ -427,7 +444,7 @@ function adminView() {
     })),
     rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
       nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
-      online: !!(S.persons[pid] && S.persons[pid].online), where: S.devices[did] ? seatWhere(S.devices[did].pc) : null,
+      online: !!(S.persons[pid] && S.persons[pid].online), where: S.devices[did] ? seatWhere(S.devices[did]) : null,
     })) : null,
   };
 }
@@ -733,6 +750,20 @@ io.on("connection", (sock) => {
     toUsuario(dev, cleanText(text, MAX_MSG), m.file, cb);
   });
 
+  // El Arnés avisa que el trabajo está listo para entregar (único botón que puede tocar; no escribe libre)
+  sock.on("arnes:deliver", (_d = {}, cb) => {
+    const dev = myDevice();
+    if (!dev || dev.role !== "arnes" || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no puedes entregar." });
+    if (S.paused) return reply(cb, { error: "La actividad está en pausa." });
+    const team = S.teams[dev.team];
+    // una sola vez por ronda: evita que el Arnés inunde el contexto del equipo con avisos y borre los mensajes reales
+    if (team.deliverAt) return reply(cb, { error: "Ya avisaste que el trabajo está listo (una vez por ronda)." });
+    team.deliverAt = Date.now();
+    addMsg(dev.team, "C", authorOf(dev), "🏁 El Arnés avisa: el trabajo está LISTO para entregar.");
+    reply(cb, { ok: true });
+    sync();
+  });
+
   sock.on("answer", ({ qid, k } = {}, cb) => {
     const dev = myDevice();
     if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no." });
@@ -755,6 +786,7 @@ io.on("connection", (sock) => {
     // la persona de este teléfono confirma que llegó a su nuevo asiento
     const p = myPerson();
     if (!p || S.phase !== "rotate" || !(p.id in S.rot.assign)) return reply(cb, { error: "Ahora no toca marcar listo." });
+    if (Date.now() - S.rot.since < READY_COOLDOWN_MS) return reply(cb, { error: "Primero ve a tu puesto; en un momento se habilita." });
     S.rot.ready[p.id] = true;
     reply(cb, { ok: true });
     checkRotationDone();
@@ -819,6 +851,17 @@ io.on("connection", (sock) => {
   });
   // cierra la conversación abierta y pasa al siguiente Modelo de la cola
   adminOn("admin:endLive", () => { if (!S.live) return "No hay ninguna conversación abierta."; endLive(); });
+  // atender YA a un Modelo que está en la cola (abre la conversación en vivo, sin esperar la espera mínima)
+  adminOn("admin:serveNow", ({ team }) => {
+    if (S.phase !== "activity") return "Solo durante la actividad.";
+    if (S.paused) return "La actividad está en pausa.";
+    if (S.live) return "Ya hay una conversación abierta; termínala primero.";
+    const i = S.queue.findIndex((q) => q.team === Number(team));
+    if (i < 0) return "Ese Modelo ya no está en la cola.";
+    const head = S.queue.splice(i, 1)[0];
+    S.live = { team: head.team, since: Date.now(), lastAt: Date.now() };
+    addMsg(head.team, "U", head.author, head.text, head.file);
+  });
   // suelta un puesto trabado para que su persona vuelva desde otro teléfono con su nickname
   adminOn("admin:release", ({ deviceId }) => {
     const dev = S.devices[deviceId];
@@ -911,7 +954,9 @@ setInterval(() => {
   let all = liveTimeout() || serveQueue();
   if (autoRot()) {
     S.timerLeft = Math.max(0, S.timerLeft - 1);
-    if (S.timerLeft === 0) { if (startRotation()) all = true; else S.timerLeft = S.cfg.rotSec; }
+    // auto-rotación solo si hay alguien conectado: evita que la sala rebaraje roles sola en un break con todos offline.
+    // (La rotación manual del admin "Rotar ya" sí incluye a los offline, para que un celular dormido no se quede.)
+    if (S.timerLeft === 0) { if (anySeatedOnline() && startRotation()) all = true; else S.timerLeft = S.cfg.rotSec; }
   }
   if (all) sync(); else syncAdmins();
 }, 1000);
