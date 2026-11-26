@@ -164,10 +164,18 @@ function freshState() {
     quiz: {}, // deviceId -> { done, q, seen } preguntas del minijuego en este turno
     queue: [], // modelos esperando al Usuario: [{ team, text, at, author }]
     live: null, // conversación abierta entre el Usuario y un Modelo: { team, since, lastAt }
+    startedAt: 0, // cuándo se inició la actividad (para decir a los cuántos minutos terminó cada tarea)
+    // Tareas que crea el Usuario con "Nueva tarea" (no todo mensaje del Usuario es una tarea: también hay aclaraciones).
+    // [{ id: 1, text, at, teams: [índices de equipo], done: { [equipo]: { at, by: "modelo"|"usuario", nick, round } } }]
+    tasks: [],
   };
 }
 // coolFrom: cuándo terminó su última conversación con el Usuario (el enfriamiento se calcula con la config actual)
-function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolFrom: 0, deliverAt: 0 }; }
+// lostU: { total, at, tasks: [ids] } mensajes del Usuario que la ventana de contexto le borró al equipo
+//        (tasks: de qué tareas se perdió la instrucción original), para avisarle al Modelo
+function newTeam() { return { msgs: [], bonus: 0, bonusLog: "", forgot: null, forgotTotal: 0, sent: 0, coolFrom: 0, deliverAt: 0, lostU: null }; }
+// un mensaje del Usuario (profesor) al Modelo: el encargo o sus respuestas
+const fromUsuario = (m) => m.ch === "U" && m.role === "profesor";
 
 // Crea una sala independiente. Toda la lógica del juego vive dentro de este cierre y usa SU propio estado S,
 // así varias salas corren a la vez sin mezclarse (ni sus equipos, ni la cola del Usuario, ni la rotación).
@@ -253,9 +261,10 @@ function createRoom(SALA) {
     return { role: dev.role, nick: person ? person.nick : "?", pc: dev.pc };
   }
   // file: id de un archivo ya subido por /subir (o null)
-  function addMsg(t, ch, author, text, file) {
+  // task: id de la tarea que este mensaje crea (solo el mensaje con que el Usuario inicia una tarea)
+  function addMsg(t, ch, author, text, file, task) {
     const team = S.teams[t];
-    team.msgs.push({ id: S.nextId++, ch, text, file: file || null, role: author.role, nick: author.nick, pc: author.pc, at: Date.now() });
+    team.msgs.push({ id: S.nextId++, ch, text, file: file || null, role: author.role, nick: author.nick, pc: author.pc, at: Date.now(), task: task || null });
     if (ch === "U" && S.live && S.live.team === t) S.live.lastAt = Date.now();
     team.sent++;
     enforce(t);
@@ -270,6 +279,13 @@ function createRoom(SALA) {
     let total = usedOf(t), removed = 0;
     while (total > lim && team.msgs.length) {
       const first = team.msgs[0];
+      // se pierde (toda o parte de) una instrucción del Usuario: se cuenta una vez por mensaje para avisarle al Modelo
+      if (fromUsuario(first) && !first.cut) {
+        const prev = team.lostU || { total: 0, tasks: [] };
+        const tasks = (prev.tasks || []).slice();
+        if (first.task && !tasks.includes(first.task)) tasks.push(first.task); // se perdió el enunciado de esa tarea
+        team.lostU = { total: prev.total + 1, at: Date.now(), tasks };
+      }
       // un archivo no se puede recortar: se olvida completo
       if ((S.cfg.mode === "mensaje" && team.msgs.length > 1) || first.file) {
         const c = costOf(first); dropMsg(team); removed += c; total -= c;
@@ -451,7 +467,13 @@ function createRoom(SALA) {
       v.context = { used: usedOf(t), by: usedBy(t), limit: limitOf(t), base: S.cfg.limit, bonus: team.bonus, bonusLog: team.bonusLog, forgot: team.forgot, oldestId: team.msgs[0] ? team.msgs[0].id : null };
       v.msgs = team.msgs.filter((m) => READ[dev.role].includes(m.ch)).map((m) => msgOut(m, dev.pc));
       if (dev.role === "modelo") {
-        v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: coolUntilOf(t), waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec };
+        v.usuario = { live: !!S.live && S.live.team === t, liveEndsAt: liveEndsAt(), queue: queueInfo(t), coolUntil: coolUntilOf(t), waiting: S.queue.length, queueSec: S.cfg.queueSec, coolSec: S.cfg.coolSec,
+          // la ventana de contexto le borró instrucciones del Usuario (none: ya no queda ninguna en su memoria;
+          // tasks: tareas cuyo enunciado ya no tiene)
+          lost: team.lostU ? { total: team.lostU.total, at: team.lostU.at, none: !team.msgs.some(fromUsuario), tasks: team.lostU.tasks || [] } : null };
+        // Tareas del equipo, SOLO con su número y si ya la terminó: el enunciado vive en el chat (y se puede olvidar).
+        // Solo el Modelo las ve y las marca; el Arnés y el Revisor no saben cuántas tareas hay.
+        v.tasks = teamTasks(t).map((k) => ({ id: k.id, done: !!k.done[t] }));
       }
       // el Revisor ve a quién debe revisar: el Arnés de su equipo (su id, p. ej. A1)
       if (dev.role === "revisor") { const a = deviceAt(t, "arnes"); v.reviewTarget = a ? seatWhere(a).label : null; }
@@ -461,11 +483,13 @@ function createRoom(SALA) {
   }
 
   // los archivos viajan como enlace (/archivo/<id>), no dentro de la vista, para no mandar megas cada segundo
-  const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, role: m.role, nick: m.nick, file: fileOut(m.file), mine: pc !== undefined && m.pc === pc });
+  const msgOut = (m, pc) => ({ id: m.id, ch: m.ch, text: m.text, cut: !!m.cut, role: m.role, nick: m.nick, file: fileOut(m.file), mine: pc !== undefined && m.pc === pc, task: m.task || null });
+  // tareas asignadas a un equipo
+  const teamTasks = (t) => (S.tasks || []).filter((k) => k.teams.includes(t));
 
   function adminView() {
     return {
-      kind: "admin", sala: salaInfo(), salas: salasList(), phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(SALA), now: Date.now(), maxTeams: MAX_TEAMS,
+      kind: "admin", sala: salaInfo(), salas: salasList(), phase: S.phase, code: S.code, cfg: S.cfg, paused: S.paused, round: S.round, timerLeft: S.timerLeft, acceso: acceso(SALA), now: Date.now(), maxTeams: MAX_TEAMS, startedAt: S.startedAt || 0,
       live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
       queue: S.queue.map((q) => ({ team: q.team, text: q.text, file: !!q.file, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
       devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
@@ -475,7 +499,10 @@ function createRoom(SALA) {
       teams: S.teams.map((tm, t) => ({
         used: usedOf(t), by: usedBy(t), limit: limitOf(t), bonus: tm.bonus, sent: tm.sent, forgotTotal: tm.forgotTotal,
         warnings: teamWarnings(t), msgs: tm.msgs.map((m) => msgOut(m)), coolUntil: coolUntilOf(t),
+        lostU: tm.lostU ? { total: tm.lostU.total, none: !tm.msgs.some(fromUsuario), tasks: tm.lostU.tasks || [] } : null,
       })),
+      // el admin sí ve el enunciado de cada tarea y qué equipos la terminaron
+      tasks: (S.tasks || []).map((k) => ({ id: k.id, text: k.text, at: k.at, teams: k.teams, done: k.done })),
       rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
         nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
         online: !!(S.persons[pid] && S.persons[pid].online), where: S.devices[did] ? seatWhere(S.devices[did]) : null,
@@ -491,9 +518,17 @@ function createRoom(SALA) {
       exportadoAt: new Date().toISOString(), sala: SALA, salaNombre: SALA_NAME, sesion: S.code, ronda: S.round, cfg: S.cfg,
       equipos: S.teams.map((tm, t) => ({
         equipo: t + 1, enviados: tm.sent, olvidados: tm.forgotTotal, bonus: tm.bonus,
+        instruccionesUsuarioOlvidadas: tm.lostU ? tm.lostU.total : 0,
+        tareasOlvidadas: tm.lostU ? tm.lostU.tasks || [] : [],
         mensajes: tm.msgs.map((m) => ({ id: m.id, canal: m.ch, rol: m.role, nick: m.nick, pc: m.pc, texto: m.text, archivo: m.file && S.files[m.file] ? (S.files[m.file].name || m.file) : null, at: m.at })),
       })),
       personas: Object.values(S.persons).map((p) => ({ nick: p.nick, historialRoles: p.history })),
+      // cada tarea, a qué equipos se le dio y cuándo la terminó cada uno (y quién la marcó)
+      tareas: (S.tasks || []).map((k) => ({
+        tarea: k.id, texto: k.text, creadaAt: new Date(k.at).toISOString(), equipos: k.teams.map((t) => t + 1),
+        terminadas: Object.entries(k.done).map(([t, d]) => ({ equipo: Number(t) + 1, at: new Date(d.at).toISOString(), ronda: d.round, marcadaPor: d.by === "modelo" ? "Modelo " + d.nick : "Usuario",
+          minutosDesdeInicio: S.startedAt ? Math.round((d.at - S.startedAt) / 6000) / 10 : null })),
+      })),
     };
   }
   // El Revisor sube un archivo (cuerpo crudo; tipo en Content-Type, nombre en X-Name, su teléfono en X-Device)
@@ -751,6 +786,20 @@ function createRoom(SALA) {
       sync();
     });
 
+    // El Modelo marca una de sus tareas como terminada (el Arnés y el Revisor no pueden: no saben cuántas tareas hay)
+    on("task:done", ({ task } = {}, cb) => {
+      const dev = myDevice();
+      if (!dev || dev.role !== "modelo" || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Solo el Modelo marca las tareas, durante la actividad." });
+      if (S.paused) return reply(cb, { error: "La actividad está en pausa." });
+      const k = (S.tasks || []).find((x) => x.id === Number(task));
+      if (!k || !k.teams.includes(dev.team)) return reply(cb, { error: "Tu equipo no tiene esa tarea." });
+      if (k.done[dev.team]) return reply(cb, { error: `Ya marcaste la Tarea ${k.id} como terminada.` });
+      const person = S.persons[dev.personId];
+      k.done[dev.team] = { at: Date.now(), by: "modelo", nick: person ? person.nick : "?", round: S.round };
+      reply(cb, { ok: true, task: k.id });
+      sync();
+    });
+
     on("answer", ({ qid, k } = {}, cb) => {
       const dev = myDevice();
       if (!dev || dev.team === null || S.phase !== "activity") return reply(cb, { error: "Ahora no." });
@@ -883,13 +932,34 @@ function createRoom(SALA) {
     adminOn("admin:start", () => {
       if (S.phase !== "lobby") return "La actividad ya empezó.";
       if (!S.teams.some((_, t) => CORE.every((r) => deviceAt(t, r)))) return "Se necesita al menos un equipo con Modelo y Arnés.";
-      S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.paused = false; S.quiz = {};
+      S.phase = "activity"; S.timerLeft = S.cfg.rotSec; S.paused = false; S.quiz = {}; S.startedAt = Date.now();
     });
-    adminOn("admin:prompt", ({ text, team }) => {
+    // El Usuario le escribe a todos los Modelos o a uno. Con task: true es una NUEVA TAREA (Tarea N): queda en la
+    // lista de tareas de esos equipos y su Modelo la puede marcar como terminada. Sin task es una aclaración.
+    adminOn("admin:prompt", ({ text, team, task }) => {
       text = cleanText(text, 600);
       if (S.phase !== "activity") return "Inicia la actividad primero.";
       if (!text) return "Escribe el prompt.";
-      S.teams.forEach((_, t) => { if (team === "all" || Number(team) === t) addMsg(t, "U", authorOf(null), text); });
+      const targets = S.teams.map((_, t) => t).filter((t) => team === "all" || Number(team) === t);
+      if (!targets.length) return "Equipo inválido.";
+      let id = null;
+      if (task) {
+        if (!S.tasks) S.tasks = [];
+        id = S.tasks.length + 1;
+        S.tasks.push({ id, text, at: Date.now(), teams: targets, done: {} });
+      }
+      targets.forEach((t) => addMsg(t, "U", authorOf(null), text, null, id));
+    });
+    // El Usuario marca (o reabre, done: false) una tarea de un equipo: por si el Modelo se lo dijo en la conversación
+    // o marcó terminada una tarea por error.
+    adminOn("admin:taskDone", ({ team, task, done }) => {
+      const t = Number(team);
+      if (S.phase !== "activity" && S.phase !== "rotate") return "Solo durante la actividad.";
+      const k = (S.tasks || []).find((x) => x.id === Number(task));
+      if (!k || !k.teams.includes(t)) return "Ese equipo no tiene esa tarea.";
+      if (done === false) { delete k.done[t]; return; }
+      if (k.done[t]) return `El equipo ${t + 1} ya terminó la Tarea ${k.id}.`;
+      k.done[t] = { at: Date.now(), by: "usuario", nick: "profesor", round: S.round };
     });
     adminOn("admin:pause", () => {
       if (S.phase !== "activity") return "Solo durante la actividad.";

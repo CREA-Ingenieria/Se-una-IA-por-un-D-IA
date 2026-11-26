@@ -27,6 +27,8 @@ img{max-width:100%}
 @keyframes flash{0%{background:var(--m)}100%{background:var(--pill)}}
 @keyframes forget{0%{opacity:0;transform:translate(-50%,-6px)}15%{opacity:1;transform:translate(-50%,0)}85%{opacity:1}100%{opacity:0}}
 @keyframes pop{0%{transform:scale(.92);opacity:0}100%{transform:none;opacity:1}}
+/* el aviso se centra con translateX(-50%): su animación debe conservarlo (con "pop" quedaba corrido a la derecha) */
+@keyframes toastin{0%{transform:translateX(-50%) scale(.92);opacity:0}100%{transform:translateX(-50%);opacity:1}}
 .anim{animation:reveal .85s cubic-bezier(.22,1,.36,1) both}
 #app.settled .anim{animation:none}
 
@@ -60,7 +62,7 @@ img{max-width:100%}
 .bar{height:7px;border-radius:7px;background:var(--pill);overflow:hidden}
 .bar>span{display:block;height:100%;border-radius:7px;transition:width .4s}
 .err{color:var(--y);font-size:13px;min-height:18px}
-.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:50;background:#fff;color:#000;border-radius:999px;padding:12px 20px;font-weight:600;font-size:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);animation:pop .3s both;max-width:calc(100% - 32px);text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:50;background:#fff;color:#000;border-radius:999px;padding:12px 20px;font-weight:600;font-size:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);animation:toastin .3s both;width:-webkit-max-content;width:max-content;max-width:calc(100% - 32px);text-align:center}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 
 /* Landing */
@@ -179,7 +181,6 @@ table.devs{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
 .rules details:not([open]) summary::after{content:"▸"}
 .rules .rt{font-size:11px;font-weight:700;letter-spacing:.12em}
 .rules ul{margin:10px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:13.5px;line-height:1.4;color:var(--soft)}
-.rules li.all{color:var(--y);font-weight:600}
 
 /* Fotos en el chat */
 .bubble .photo{display:block;margin:4px 0 6px}
@@ -219,6 +220,20 @@ table.devs{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
 /* iPad con el teclado abierto: el chat ocupa solo lo visible y el último mensaje queda sobre el teclado */
 html.kb .chat,html.kb .livechat{height:calc(var(--vvh,100dvh) - 16px)}
 .ustat .cd,.livechat .cd{color:inherit;font-weight:700}
+/* Modelo: la ventana de contexto le borró una instrucción del Usuario */
+.lostline{margin:10px 12px 0;padding:8px 12px;border-radius:14px;border:1px solid var(--a);background:rgba(233,162,34,.12);font-size:12.5px;line-height:1.35;color:var(--fg);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.lostline b{color:var(--a)}
+.lostline .acts{display:flex;gap:6px;margin-left:auto}
+/* tareas: el Modelo marca las suyas (solo ve el número); el admin ve todas con su enunciado */
+.tasksbar{margin:10px 12px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tasksbar .ttl{font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--muted);margin-right:2px}
+.tchip{display:inline-flex;align-items:center;min-height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--y);background:transparent;color:var(--fg);font:600 12.5px var(--ui);text-align:left}
+button.tchip{cursor:pointer}
+button.tchip:disabled{opacity:.5;cursor:default}
+.tchip.done{background:var(--t);border-color:var(--t);color:#000}
+.trow{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.tcard{padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+.tcard .ttext{flex:1 1 220px;min-width:0;color:var(--soft);overflow-wrap:anywhere}
 .chat.live .bubble,.livechat .bubble{font-size:17px;max-width:min(85%,760px)}
 
 /* Interruptor del Revisor y botón de foto */

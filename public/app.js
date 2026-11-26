@@ -41,7 +41,6 @@ const RULES = {
 };
 const AUTHORS = ["David Octavio Ibarra", "Sebastián Suárez", "Francisco Santamaría", "Ángel Peñaranda"];
 const credits = () => `<footer class="credits">Creado por ${AUTHORS.map(esc).join(" · ")} y el equipo CREA · Facultad de Ingeniería, Universidad de los Andes</footer>`;
-const RULE_ALL ="Prohibido usar internet, el celular o buscar información: el agente solo sabe lo que está en el chat.";
 const clipIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.5 3.5 0 0 1 5 5L10.5 18a2 2 0 0 1-3-3L15 7.5"/></svg>`;
 const camIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="14" r="3.5"/></svg>`;
 const HINT = {
@@ -147,6 +146,13 @@ socket.on("view", (v) => {
   const wasLive = !!(prev && prev.usuario && prev.usuario.live), isLive = !!(v.usuario && v.usuario.live);
   if (isLive && !wasLive) { L.to = "usuario"; toast("¡El Usuario te está atendiendo! Los mensajes llegan al instante."); }
   if (!isLive && wasLive) { L.to = null; toast("El Usuario terminó la conversación."); }
+  // admin: avisar cuando un Modelo marca una tarea como terminada
+  if (v.kind === "admin" && prev && prev.kind === "admin" && v.tasks && prev.tasks) {
+    v.tasks.forEach((k) => {
+      const old = (prev.tasks.find((x) => x.id === k.id) || {}).done || {};
+      Object.entries(k.done || {}).forEach(([t, d]) => { if (!old[t] && d.by === "modelo") toast(`El Modelo del equipo ${+t + 1} terminó la Tarea ${k.id}.`); });
+    });
+  }
   // admin: avisar cuando abre una conversación con un Modelo
   if (v.kind === "admin" && v.live && !(prev && prev.live && prev.live.team === v.live.team)) toast(`El Modelo del equipo ${v.live.team + 1} te escribió.`);
   render();
@@ -237,7 +243,7 @@ function vWaiting(v) {
 
 // Casilla de reglas del rol (siempre visible en el chat; se puede plegar)
 function rulesList(r, foldable) {
-  const items = RULES[r].map((x) => `<li>${esc(x)}</li>`).join("") + `<li class="all">${esc(RULE_ALL)}</li>`;
+  const items = RULES[r].map((x) => `<li>${esc(x)}</li>`).join("");
   const title = `<span class="rt" style="color:${RC[r]}">REGLAS DE TU ROL · ${RN[r].toUpperCase()}${r === "arnes" ? " (EJECUTOR)" : ""}</span>`;
   const phrase = `<p class="rphrase" style="border-color:${RC[r]}">${esc(RN[r])}: <b>${esc(PHRASE[r])}</b></p>`;
   if (!foldable) return `${title}${phrase}<ul>${items}</ul>`;
@@ -254,7 +260,8 @@ function fileView(f, small) {
   return `<a class="filelink" href="${u}" target="_blank" rel="noopener">${clipIcon}<span>${esc(f.name || "Archivo")}</span></a>`;
 }
 function bubble(m, extra = "") {
-  const name = m.mine ? "TÚ" : m.role === "profesor" ? "USUARIO (PROFESOR)" : (RN[m.role] || m.role).toUpperCase() + " · " + m.nick;
+  // el mensaje con que el Usuario inició una tarea lleva su número
+  const name = m.mine ? "TÚ" : m.role === "profesor" ? "USUARIO (PROFESOR)" + (m.task ? " · TAREA " + m.task : "") : (RN[m.role] || m.role).toUpperCase() + " · " + m.nick;
   return `<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${esc(name)}</span>${fileView(m.file)}${m.text ? (m.cut ? "…" : "") + esc(m.text) : ""}${extra}</div>`;
 }
 
@@ -282,6 +289,34 @@ function usuarioStatus(u) {
   return `<div class="ustat">Para hablar con el Usuario entras a la cola: espera mínima ${mmss(u.queueSec)}${u.waiting ? ` · ${u.waiting} en la cola` : ""}</div>`;
 }
 
+// Modelo: alerta pequeña cuando la ventana de contexto le borró (todo o parte de) una instrucción del Usuario.
+// Así decide si seguir con lo que tiene o volver a preguntarle. Se oculta al escoger; vuelve si se pierde otra.
+const lostKey = (v) => `seunaia-olvido-${(v.sala && v.sala.id) || "1"}-${v.code}-${v.you.team}`;
+function lostAlert(v) {
+  const l = v.usuario && v.usuario.lost;
+  if (!l) return "";
+  const n = l.total - (Number(store.get(lostKey(v))) || 0);
+  if (n <= 0) return "";
+  // tareas (sin terminar) cuyo enunciado ya no está en su memoria
+  const done = new Set((v.tasks || []).filter((k) => k.done).map((k) => k.id));
+  const tl = (l.tasks || []).filter((id) => !done.has(id));
+  const tasksTxt = tl.length ? ` Ya no tienes el enunciado de la ${tl.length === 1 ? "Tarea " + tl[0] : "Tareas " + listY(tl)}.` : "";
+  return `<div class="lostline" role="status"><span>⚠ <b>Tu memoria olvidó ${n === 1 ? "un mensaje" : n + " mensajes"} del Usuario${l.none ? ": ya no te queda ninguna instrucción suya" : ""}.</b>${tasksTxt} ¿Sigues con lo que tienes o le vuelves a preguntar?</span>
+    <span class="acts"><button type="button" class="btn dark sm" data-act="lostOk" data-total="${l.total}">Seguir así</button><button type="button" class="btn sm" style="background:var(--y);color:#000" data-act="lostAsk" data-total="${l.total}">Volver a preguntar</button></span></div>`;
+}
+// "1, 2 y 3"
+const listY = (a) => (a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " y " + a[a.length - 1]);
+// Modelo: sus tareas, solo con el número (el enunciado está en el chat y se puede olvidar). Marca cada una al
+// terminarla (con confirmación: dos toques). El Arnés y el Revisor no ven tareas.
+function tasksBar(v) {
+  const ts = v.tasks || [];
+  if (!ts.length) return "";
+  const chips = ts.map((k) => (k.done
+    ? `<span class="tchip done">✓ Tarea ${k.id} terminada</span>`
+    : `<button type="button" class="tchip" data-act="taskMark" data-task="${k.id}"${v.paused ? " disabled" : ""}>${L.confirm === "task:" + k.id ? `¿Terminaste la Tarea ${k.id}? Toca otra vez` : `Tarea ${k.id} · marcar terminada`}</button>`)).join("");
+  return `<div class="tasksbar" role="group" aria-label="Tus tareas"><span class="ttl">TUS TAREAS</span>${chips}</div>`;
+}
+
 function vChat(v) {
   const r = v.you.role, c = v.context, u = v.usuario, live = !!(u && u.live), pct = Math.min(100, (c.used / c.limit) * 100);
   const now = Date.now(), forgot = c.forgot && now - c.forgot.at < 3000;
@@ -306,7 +341,7 @@ function vChat(v) {
     const off = dis || (blocked ? " disabled" : "");
     const hold = blocked ? (u.queue ? "Ya estás en la cola del Usuario…" : "Espera para volver a escribirle al Usuario…") : place;
     const many = Object.keys(dests).length > 1;
-    compose = `${r === "revisor" && v.reviewTarget ? `<div class="reviewbar">👁️ Revisa al <b>Arnés ${esc(v.reviewTarget)}</b> y descríbele al Modelo lo que hace</div>` : ""}${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
+    compose = `${r === "revisor" && v.reviewTarget ? `<div class="reviewbar">👁️ Revisa al <b>Arnés ${esc(v.reviewTarget)}</b> y descríbele al Modelo lo que hace</div>` : ""}${u ? tasksBar(v) : ""}${u ? lostAlert(v) : ""}${u ? usuarioStatus(u) : ""}<div class="revbar" role="group" aria-label="Destino del mensaje"><span class="muted">${many ? "Escribirle a:" : "Le escribes a:"}</span>
         ${Object.entries(dests).map(([k, d]) => `<button type="button" class="seg${to === k ? " on" : ""}" aria-pressed="${to === k}" data-act="to" data-to="${k}">${d[1]}</button>`).join("")}</div>
       <form class="compose" data-submit="send"><input class="input" id="msg" maxlength="280" autocomplete="off" placeholder="${hold}" aria-label="Mensaje para ${name}"${off}>
         ${r === "revisor" ? `<label class="btn dark camera${dis ? " off" : ""}" for="photo" data-act="pick" aria-label="Mandar foto, video, audio o archivo a ${name}" title="Mandar foto, video, audio o archivo">${camIcon}</label>
@@ -417,16 +452,29 @@ function teamCard(v, tm, t, live) {
   const slots = ROLES.map((r) => { const d = devs.find((x) => x.role === r);
     return `<div class="slot"><span class="dot" style="background:${RC[r]}"></span>${d ? esc(d.nick || "—") : "<span class='muted'>vacío</span>"}<span class="pc">${RN[r]}${d ? " · " + esc(whereL(d.where)) : ""}</span></div>`; }).join("");
   const feed = live ? `${ctxBar(tm.by || {}, tm.limit)}${ctxLegend(tm.by || {})}
-    <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.file ? "[archivo] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
+    <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.task ? `<b style="color:var(--t)">[Tarea ${m.task}]</b> ` : ""}${m.file ? "[archivo] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
   // estado del Modelo de este equipo frente al Usuario
   const talking = live && v.live && v.live.team === t, qi = live ? v.queue.findIndex((q) => q.team === t) : -1, cool = live ? secsTo(tm.coolUntil) : 0;
   const state = talking ? `<span class="pill" style="background:var(--y);color:#000">CONVERSANDO CONTIGO</span>`
     : qi >= 0 ? `<span class="pill" style="background:var(--pill);color:#fff">EN COLA · PUESTO ${qi + 1}</span>`
     : cool > 0 ? `<span class="pill" style="background:var(--pill);color:#c8c8c8">ENFRIAMIENTO ${mmss(cool)}</span>` : "";
+  // tareas de este equipo: cuáles terminó (y quién la marcó); el admin puede marcar o reabrir
+  const tasks = live ? teamTasksOf(v, t).map((k) => {
+    const d = k.done && k.done[t];
+    return d
+      ? `<div class="trow"><span class="tchip done" title="${esc(k.text)}">✓ Tarea ${k.id} · ${doneWhen(v, d)} · ${d.by === "modelo" ? "la marcó el Modelo" : "la marcaste tú"}</span><button class="btn dark sm" data-act="taskDone" data-t="${t}" data-task="${k.id}" data-done="0" title="Por si fue un error: la tarea vuelve a estar en curso">Reabrir</button></div>`
+      : `<div class="trow"><span class="tchip" title="${esc(k.text)}">Tarea ${k.id} · en curso</span><button class="btn dark sm" data-act="taskDone" data-t="${t}" data-task="${k.id}" title="Márcala tú si el Modelo te dijo que terminó">Marcar terminada</button></div>`;
+  }).join("") : "";
+  // el Modelo ya no tiene (toda) la instrucción del Usuario en su memoria
+  const lt = live && tm.lostU ? (tm.lostU.tasks || []).filter((id) => !teamTasksOf(v, t).some((k) => k.id === id && k.done && k.done[t])) : [];
+  const lost = live && tm.lostU ? `<span class="warn">▲ el Modelo olvidó ${tm.lostU.total === 1 ? "1 mensaje" : tm.lostU.total + " mensajes"} tuyos${lt.length ? ` (ya no tiene el enunciado de la Tarea ${listY(lt)})` : tm.lostU.none ? " (ya no tiene tu instrucción)" : ""}</span>` : "";
   return `<div class="card team${talking ? " asking" : ""}"><h3>EQUIPO ${t + 1}${live ? `<span class="muted">${tm.used}/${tm.limit}${tm.bonus ? " (+" + tm.bonus + ")" : ""}</span>` : ""}</h3>
-    ${state}${feed}${slots}${tm.warnings.map((w) => `<span class="warn">▲ ${esc(w)}</span>`).join("")}
+    ${state}${tasks}${feed}${slots}${tm.warnings.map((w) => `<span class="warn">▲ ${esc(w)}</span>`).join("")}${lost}
     ${live ? `<button class="btn dark sm" data-act="openTeam" data-t="${t}">Ver los canales</button>` : ""}</div>`;
 }
+const teamTasksOf = (v, t) => (v.tasks || []).filter((k) => k.teams.includes(t));
+// "a los 12:34" desde que se inició la actividad (o la ronda, si no hay hora de inicio)
+const doneWhen = (v, d) => (v.startedAt ? "a los " + mmss(Math.max(0, Math.round((d.at - v.startedAt) / 1000))) : "ronda " + d.round);
 // Disposición física del salón: cuántas columnas y cómo se nombran filas/columnas, + mapa de puestos
 function boardCard(v) {
   const b = v.cfg.board || { cols: 0, rowStyle: "letters", colStyle: "numbers" };
@@ -481,7 +529,7 @@ function vAdmin(v) {
     </div>`;
   }
   if (v.phase === "end") {
-    return `<div class="adm">${head("RESUMEN", exportBtn + resetBtn)}<div class="teams">${v.teams.map((tm, t) => `<div class="card team"><h3>EQUIPO ${t + 1}</h3><span>${tm.sent} mensajes enviados</span><span>${tm.forgotTotal} caracteres olvidados</span><span>+${tm.bonus} caracteres ganados en el minijuego</span></div>`).join("")}</div></div>`;
+    return `<div class="adm">${head("RESUMEN", exportBtn + resetBtn)}<div class="teams">${v.teams.map((tm, t) => `<div class="card team"><h3>EQUIPO ${t + 1}</h3>${teamTasksOf(v, t).map((k) => { const d = k.done && k.done[t]; return d ? `<span style="color:var(--t)">✓ Tarea ${k.id} terminada ${doneWhen(v, d)}</span>` : `<span class="muted">✗ Tarea ${k.id} sin terminar</span>`; }).join("")}<span>${tm.sent} mensajes enviados</span><span>${tm.forgotTotal} caracteres olvidados</span><span>+${tm.bonus} caracteres ganados en el minijuego</span></div>`).join("")}</div></div>`;
   }
   const rot = v.phase === "rotate";
   const ready = rot ? v.rotation.filter((x) => x.ready).length : 0;
@@ -506,9 +554,19 @@ function vAdmin(v) {
       <span class="ctlt">CIERRE SIN MENSAJES</span><select class="input sm" data-change="cfgLive" aria-label="La conversación se cierra sola tras este tiempo sin mensajes">${secOpts(LIVE_OPTS, v.cfg.liveSec)}</select></div></div>`;
   const usuario = rot ? "" : vUsuario(v);
   const readyL = rot ? `<div class="card" style="padding:14px"><div class="readyl">${v.rotation.map((x) => `<span class="pill" style="background:${x.ready ? "var(--t)" : "var(--pill)"};color:${x.ready ? "#000" : "#c8c8c8"}">${x.ready ? "✓" : x.online ? "…" : "⚠"} ${esc(x.nick)} → ${esc(whereL(x.where))}</span>`).join("")}</div></div>` : "";
-  const bc = rot ? "" : `<form class="card bc" data-submit="prompt"><textarea id="bc" maxlength="600" placeholder="Prompt para los Modelos. Ej: Construyan un puente de pasta que aguante un celular." aria-label="Prompt"></textarea>
-    <div class="row"><select class="input" id="bcTarget" style="width:auto" aria-label="Destino"><option value="all">Todos los equipos</option>${v.teams.map((_, t) => `<option value="${t}">Solo equipo ${t + 1}</option>`).join("")}</select><button class="btn" style="background:var(--y)">ENVIAR PROMPT</button></div></form>`;
-  return `<div class="adm">${head(rot ? "ROTANDO" : v.paused ? "EN PAUSA" : "EN VIVO", right)}${readyL}${usuario}${controls}${bc}
+  // El Usuario decide qué mensaje es una TAREA nueva (Nueva tarea) y cuál es solo una aclaración
+  const nextTask = (v.tasks || []).length + 1;
+  const bc = rot ? "" : `<form class="card bc" data-submit="prompt"><textarea id="bc" maxlength="600" placeholder="Escribe una tarea nueva para los Modelos (ej: Dibujen un pato) o una aclaración." aria-label="Mensaje para los Modelos"></textarea>
+    <div class="row"><select class="input" id="bcTarget" style="width:auto" aria-label="Destino"><option value="all">Todos los equipos</option>${v.teams.map((_, t) => `<option value="${t}">Solo equipo ${t + 1}</option>`).join("")}</select>
+      <button class="btn dark" data-kind="msg" title="Solo un mensaje: no crea tarea">ENVIAR ACLARACIÓN</button>
+      <button class="btn" style="background:var(--y)" data-kind="task" title="Crea la Tarea ${nextTask}: los Modelos la podrán marcar como terminada">＋ NUEVA TAREA ${nextTask}</button></div>
+    <p class="muted" style="margin:0;font-size:12.5px;line-height:1.4"><b>Nueva tarea</b> crea la Tarea ${nextTask} con este texto; el Modelo la marca cuando la termine. <b>Aclaración</b> es solo un mensaje (por ejemplo, si un Modelo olvidó la instrucción): no crea tarea.</p></form>`;
+  // lista de tareas con su enunciado y cuántos equipos la terminaron
+  const tcard = rot || !(v.tasks || []).length ? "" : `<div class="card tcard"><span class="ctlt">TAREAS (${v.tasks.length})</span>${v.tasks.map((k) => {
+    const n = k.teams.length, d = Object.keys(k.done || {}).length;
+    return `<div class="trow"><b>Tarea ${k.id}</b><span class="ttext">${esc(k.text)}</span><span class="muted" style="font-size:12.5px">${n === v.teams.length ? "todos los equipos" : (n > 1 ? "equipos " : "equipo ") + listY(k.teams.map((x) => x + 1))} · <b style="color:var(--t)">${d}/${n} terminada${n > 1 ? "s" : ""}</b></span></div>`;
+  }).join("")}</div>`;
+  return `<div class="adm">${head(rot ? "ROTANDO" : v.paused ? "EN PAUSA" : "EN VIVO", right)}${readyL}${usuario}${controls}${bc}${tcard}
     <div class="teams">${v.teams.map((tm, t) => teamCard(v, tm, t, true)).join("")}</div>
     <details id="devs" class="card" style="padding:14px"><summary style="cursor:pointer;font-weight:600">Dispositivos (${v.devices.length}) · asignar personas que llegan tarde</summary><div style="margin-top:12px">${devTable(v)}</div></details>
     ${L.adminTeam !== null && v.teams[L.adminTeam] ? vTeamModal(v, L.adminTeam) : ""}</div>`;
@@ -517,7 +575,7 @@ function vAdmin(v) {
 function vUsuario(v) {
   const chat = (t) => {
     const msgs = v.teams[t].msgs.filter((m) => m.ch === "U");
-    return msgs.map((m) => `<div data-id="${m.id}" class="msg${m.role === "profesor" ? " me" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${m.role === "profesor" ? "TÚ" : "MODELO · " + esc(m.nick)}</span>${fileView(m.file)}${m.cut ? "…" : ""}${esc(m.text)}</div></div>`).join("")
+    return msgs.map((m) => `<div data-id="${m.id}" class="msg${m.role === "profesor" ? " me" : ""}${L.seen.has(m.id) ? "" : " new"}">${bean(m.role)}<div class="bubble"><span class="n" style="color:${RHEX[m.role]}">${m.role === "profesor" ? "TÚ" + (m.task ? " · TAREA " + m.task : "") : "MODELO · " + esc(m.nick)}</span>${fileView(m.file)}${m.cut ? "…" : ""}${esc(m.text)}</div></div>`).join("")
       || "<div class='empty'>Sin mensajes todavía.</div>";
   };
   const queue = v.queue.length ? `<ol class="queue">${v.queue.map((q, i) => {
@@ -532,7 +590,8 @@ function vUsuario(v) {
   return `<div class="usr"><section class="card livechat" aria-label="Conversación con el Modelo del equipo ${t + 1}">
       <div class="admhead"><div><h2 class="h1" style="font-size:24px;color:var(--y)">CONVERSANDO CON EL MODELO · EQUIPO ${t + 1}</h2>
         <span class="muted" style="font-size:12.5px">Se cierra sola en ${cd(v.live.endsAt)} si nadie escribe</span></div>
-        <button class="btn" style="background:var(--m);color:#fff" data-act="endLive">Terminar${v.queue.length ? " y atender al siguiente" : ""}</button></div>
+        <div class="row" style="gap:8px">${teamTasksOf(v, t).filter((k) => !(k.done && k.done[t])).map((k) => `<button class="btn sm" style="background:var(--t);color:#000" data-act="taskDone" data-t="${t}" data-task="${k.id}" title="${esc(k.text)}">✓ Tarea ${k.id} terminada</button>`).join("")}
+        <button class="btn" style="background:var(--m);color:#fff" data-act="endLive">Terminar${v.queue.length ? " y atender al siguiente" : ""}</button></div></div>
       <div class="msgs" id="msgs">${chat(t)}</div>
       <form class="compose" data-submit="reply" data-t="${t}"><input class="input" id="reply" maxlength="280" autocomplete="off" placeholder="Respóndele al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn" style="background:var(--y)">ENVIAR</button></form>
     </section>${qcard}</div>`;
@@ -540,7 +599,7 @@ function vUsuario(v) {
 function vTeamModal(v, t) {
   const tm = v.teams[t];
   return `<div class="modal" data-act="closeTeam"><div class="card" data-stop="1" role="dialog" aria-label="Canales del equipo ${t + 1}"><div class="admhead"><h2 class="h1" style="font-size:28px">EQUIPO ${t + 1}</h2><button class="btn dark" data-act="closeTeam">Cerrar</button></div>
-    <div class="chgrid">${["U", "C", "R"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${fileView(m.file, true)}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
+    <div class="chgrid">${["U", "C", "R"].map((c) => `<div class="chcol${c === "U" ? " e" : ""}"><h4>${c} · ${CHN[c].toUpperCase()}</h4>${tm.msgs.filter((m) => m.ch === c).map((m) => `<p><b style="color:${RC[m.role]}">${esc(m.role === "profesor" ? "tú" : m.nick)}:</b> ${m.task ? `<b style="color:var(--t)">[Tarea ${m.task}]</b> ` : ""}${fileView(m.file, true)}${m.cut ? "…" : ""}${esc(m.text)}</p>`).join("") || "<p class='muted'>—</p>"}
       ${c === "U" && !(v.live && v.live.team === t) ? `<form class="replyf" data-submit="reply" data-t="${t}"><input class="input" id="replyTeam" maxlength="280" autocomplete="off" placeholder="Escribirle al Modelo…" aria-label="Mensaje para el Modelo"><button class="btn sm" style="background:var(--y)">Enviar</button></form>` : ""}</div>`).join("")}</div></div></div>`;
 }
 
@@ -607,6 +666,9 @@ function fresh() { L.firstPaint = true; render(); }
 
 // ---------- Acciones ----------
 document.addEventListener("click", async (e) => {
+  // qué botón de envío tocó el admin: "＋ Nueva tarea" o "Enviar aclaración" (respaldo si el navegador no da e.submitter)
+  const kind = e.target.closest("[data-kind]");
+  if (kind) L.bcKind = kind.dataset.kind;
   const el = e.target.closest("[data-act]");
   if (!el) return;
   if (el.dataset.act === "closeTeam" && e.target.closest("[data-stop]") && !e.target.closest("button")) return;
@@ -629,6 +691,28 @@ document.addEventListener("click", async (e) => {
   if (act === "loginSala") { setSala(el.dataset.sala); tryToken(L.sala); render(); const pw = $("#pw"); if (pw) pw.focus(); return; }
   if (act === "to") { L.to = el.dataset.to; render(); $("#msg") && !$("#msg").disabled && $("#msg").focus(); return; }
   if (act === "endLive") { await emit("admin:endLive"); return; }
+  // admin: marca (o reabre) una tarea de un equipo
+  if (act === "taskDone") {
+    const reopen = el.dataset.done === "0", t = +el.dataset.t, k = +el.dataset.task;
+    const r = await emit("admin:taskDone", { team: t, task: k, done: !reopen });
+    if (r.ok) toast(reopen ? `La Tarea ${k} del equipo ${t + 1} vuelve a estar en curso.` : `Tarea ${k} del equipo ${t + 1} terminada.`);
+    return;
+  }
+  // Modelo: marca una de sus tareas como terminada (dos toques, para no marcarla por error)
+  if (act === "taskMark") {
+    const k = +el.dataset.task;
+    if (!twoStep("task:" + k)) return;
+    const r = await emit("task:done", { task: k });
+    if (r.ok) toast(`Marcaste la Tarea ${k} como terminada. El Usuario ya lo ve.`);
+    return;
+  }
+  // Modelo: decide qué hacer tras olvidar una instrucción del Usuario
+  if (act === "lostOk" || act === "lostAsk") {
+    store.set(lostKey(L.view), el.dataset.total);
+    if (act === "lostAsk") { L.to = "usuario"; render(); const m = $("#msg"); if (m && !m.disabled) m.focus(); return; }
+    render();
+    return;
+  }
   if (act === "deliver") { const r = await emit("arnes:deliver"); if (r.ok) toast("Avisaste al Modelo que el trabajo está listo."); return; }
   if (act === "serveNow") { const r = await emit("admin:serveNow", { team: +el.dataset.t }); if (r.ok) toast("Conversación abierta con ese Modelo."); return; }
   if (act === "export") {
@@ -784,8 +868,12 @@ document.addEventListener("submit", async (e) => {
     const ta = $("#bc"), text = (ta.value || "").trim();
     if (!text) return;
     const target = $("#bcTarget").value;
-    const r = await emit("admin:prompt", { text, team: target === "all" ? "all" : +target });
-    if (r.ok) { ta.value = ""; toast(target === "all" ? "Prompt enviado a todos los Modelos." : `Prompt enviado al equipo ${+target + 1}.`); }
+    const isTask = ((e.submitter && e.submitter.dataset.kind) || L.bcKind) === "task";
+    L.bcKind = null;
+    const n = (L.view.tasks || []).length + 1;
+    const r = await emit("admin:prompt", { text, team: target === "all" ? "all" : +target, task: isTask });
+    const to = target === "all" ? "todos los Modelos" : `el equipo ${+target + 1}`;
+    if (r.ok) { ta.value = ""; toast(isTask ? `Tarea ${n} creada y enviada a ${to}.` : `Aclaración enviada a ${to}.`); }
   }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && L.adminTeam !== null) { L.adminTeam = null; render(); } });

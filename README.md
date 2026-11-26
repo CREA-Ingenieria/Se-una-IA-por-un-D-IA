@@ -111,8 +111,8 @@ El hotspot de Windows tiene límites:
 1. **Antes**: el admin abre `/admin`, entra con la clave y define el límite de contexto (caracteres), si se borra el mensaje completo o letra por letra, el tiempo entre rotaciones, la espera mínima de la **cola** y el **enfriamiento** del Modelo (ver más abajo).
 2. **Llegada**: cada persona, en su propio celular, escribe su nickname y escoge el rol de su puesto. El sistema numera el puesto (PC 1, PC 2…) y arma los equipos solo, con una persona por rol (máximo 30 equipos ≈ 90 personas). Mientras tanto ven la pista de su rol y "esperando jugadores".
 3. **Ajustes**: en la tabla del admin se cambia el rol o el equipo de cualquier iPad; si el puesto ya está ocupado, se intercambian. Para iniciar, cada equipo necesita al menos Modelo y Arnés; sin Revisor nadie le da retroalimentación al Modelo.
-4. **Iniciar actividad** y **enviar el prompt** a todos los Modelos o a un solo equipo.
-5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso.
+4. **Iniciar actividad** y crear la primera **tarea** con *＋ Nueva tarea*, para todos los Modelos o un solo equipo (ver *Tareas*).
+5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso. Si lo que se borra es una **instrucción del Usuario** (el encargo o una respuesta suya, completa o en parte), el Modelo ve una alerta pequeña: *"Tu memoria olvidó un mensaje del Usuario"* (y si ya no le queda ninguna, lo dice). Con dos botones decide: **Seguir así** (trabaja con lo que tiene) o **Volver a preguntar** (pasa a escribirle al Usuario). La tarjeta del equipo en el panel admin también lo avisa.
 6. **Minijuego**: al lado del chat hay preguntas cortas, **máximo 3 por persona en cada turno** (se renuevan con cada rotación). Cada acierto da **+10 caracteres al propio equipo**. Además del banco fijo, el servidor genera preguntas con números y palabras al azar (cuentas de contexto, la cola, quién habla con quién…), así casi nunca se repiten.
 7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), el celular de cada persona le muestra en blanco "levántate y ve a tu puesto", su **nuevo rol**, la frase de ese rol y **la ubicación física del puesto** (fila + columna, p. ej. **B3**, o "PC N" si no se configuró un tablero). El sistema escoge un puesto con un rol que esa persona no ha hecho. Al llegar toca **¡YA LLEGUÉ!** y, cuando todos están listos, la actividad sigue y el celular carga el chat de ese puesto. El rol y el equipo viajan con la persona (en su celular); el **puesto es físico**. El emparejamiento Revisor–Arnés es una regla que se le dice a los participantes, no la impone el sistema.
 
@@ -140,7 +140,6 @@ El Modelo no le escribe al Revisor y al Revisor no le llega ningún mensaje del 
 - **Modelo**: piensa el plan, habla con el Usuario (a través de la cola), da órdenes al Arnés y recibe la retroalimentación del Revisor. Con el interruptor **Arnés / Usuario** escoge a quién le escribe.
 - **Arnés (ejecutor)**: hace con los materiales lo que diga el Modelo; no escribe.
 - **Revisor**: mira lo que hace el Arnés y se lo describe al Modelo (texto o fotos). Solo le escribe al Modelo y solo ve sus propios reportes.
-- **Todos**: prohibido usar internet, el celular o buscar información; el agente solo sabe lo que está en el chat.
 
 ### Cola y enfriamiento para hablar con el Usuario
 
@@ -163,6 +162,10 @@ Varios equipos juegan a la vez y el Usuario atiende a **un Modelo a la vez**:
 - **Rotación**: interruptor *Automática / Detenida* (detenida = el reloj no corre), −1 min, +1 min, *Reiniciar a…*, duración entre rotaciones y *Rotar ya*. Todo se puede cambiar en cualquier momento.
 - **Contexto base**: −50 / +50 caracteres por equipo, en vivo. Si se baja, cada equipo olvida lo que ya no quepa.
 - **Cola de Modelos**: arriba se ve quién está esperando, cuánto le falta y qué escribió. La conversación abierta aparece en un chat grande con el botón *Terminar y atender al siguiente*; la tarjeta de ese equipo se ilumina en amarillo.
+- **Tareas**: el Usuario decide qué mensaje es una tarea. Al escribir tiene dos botones: **＋ Nueva tarea N** crea la Tarea N con ese texto (p. ej. "Dibuja un pato") y **Enviar aclaración** manda solo un mensaje, sin crear tarea (p. ej. si un Modelo olvidó la instrucción y pregunta de nuevo). Puede haber varias tareas a la vez (p. ej. Tarea 2 "Cuéntame un chiste"), para todos los equipos o para uno solo.
+  - El **Modelo** ve *TUS TAREAS* con **solo el número** de cada tarea (el enunciado está en el chat, marcado "USUARIO · TAREA N", y se puede olvidar por la ventana de contexto). Marca cada una con *Tarea N · marcar terminada* (dos toques, para no marcarla por error). Si se le olvida el enunciado de una tarea, su alerta lo dice ("Ya no tienes el enunciado de la Tarea 1").
+  - El **Arnés** y el **Revisor** no ven tareas ni las pueden marcar.
+  - El **admin** ve la lista *TAREAS* con su enunciado y cuántos equipos la terminaron; en la tarjeta de cada equipo, cuáles terminó, a los cuántos minutos y quién la marcó. Puede *Marcar terminada* una tarea de un equipo (también desde la conversación abierta: *✓ Tarea N terminada*) o *Reabrir* la que se marcó por error. El resumen final y el historial descargado lo registran.
 - **Cola, enfriamiento y cierre sin mensajes**: se cambian en vivo desde los controles y aplican al instante.
 - *Pausar actividad*, ver los canales de cualquier equipo y *Reanudar sin esperar* durante una rotación.
 

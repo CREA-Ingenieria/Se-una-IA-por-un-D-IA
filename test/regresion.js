@@ -155,6 +155,74 @@ const phaseOf = (s) => s.last && s.last.phase;
   check(admin.last.round === roundB && admin.last.phase === "activity", "F10[1]: no auto-rota si solo hay conectados SIN puesto (sentados offline → no rebaraja en un break)");
   ha.close();
 
+  // F11: TAREAS — el Usuario decide qué mensaje es una tarea nueva; el Modelo marca cada tarea terminada
+  await call(admin, "admin:reset", {}); await wait(100);
+  const roles6 = ["modelo", "arnes", "revisor", "modelo", "arnes", "revisor"], E = [];
+  for (let i = 0; i < 6; i++) { const s = mk(); await up(s); await call(s, "hello", { browserId: "e-" + i }); await call(s, "join", { nick: "e" + i, role: roles6[i] }); E.push(s); }
+  await call(admin, "admin:start", {}); await wait(100);
+  check((await call(admin, "admin:prompt", { text: "Dibuja un pato", team: "all", task: true })).ok, "F11: el Usuario crea la Tarea 1 para todos los equipos");
+  await call(admin, "admin:prompt", { text: "El pato es amarillo", team: 0 }); // aclaración: NO es tarea
+  await call(admin, "admin:prompt", { text: "Cuéntame un chiste", team: 1, task: true }); // Tarea 2, solo equipo 2
+  await wait(150);
+  check(admin.last.tasks.length === 2 && admin.last.tasks[0].text === "Dibuja un pato" && admin.last.tasks[1].teams.join() === "1", "F11: una aclaración no crea tarea; la Tarea 2 queda solo para el equipo 2");
+  check(JSON.stringify(E[0].last.tasks) === JSON.stringify([{ id: 1, done: false }]), "F11: el Modelo del equipo 1 ve solo la Tarea 1 (número y estado, sin el enunciado)");
+  check(E[3].last.tasks.length === 2, "F11: el Modelo del equipo 2 ve dos tareas simultáneas (1 y 2)");
+  check(E[1].last.tasks === undefined && E[2].last.tasks === undefined, "F11: el Arnés y el Revisor no ven tareas");
+  const tmsg = (E[0].last.msgs || []).find((m) => m.text === "Dibuja un pato"), amsg = (E[0].last.msgs || []).find((m) => m.text === "El pato es amarillo");
+  check(tmsg && tmsg.task === 1 && amsg && amsg.task === null, "F11: en el chat, el mensaje de la tarea lleva su número; la aclaración no");
+  check(!!(await call(E[1], "task:done", { task: 1 })).error && !!(await call(E[2], "task:done", { task: 1 })).error, "F11: el Arnés y el Revisor no pueden marcar tareas");
+  check(!!(await call(E[0], "task:done", { task: 2 })).error, "F11: el Modelo no puede marcar una tarea que su equipo no tiene");
+  check((await call(E[3], "task:done", { task: 2 })).ok, "F11: el Modelo del equipo 2 marca terminada la Tarea 2 (la 1 sigue en curso)");
+  await wait(150);
+  check(JSON.stringify(E[3].last.tasks) === JSON.stringify([{ id: 1, done: false }, { id: 2, done: true }]), "F11: el equipo 2 queda con la Tarea 1 en curso y la 2 terminada");
+  check(admin.last.tasks[1].done[1] && admin.last.tasks[1].done[1].by === "modelo" && admin.last.tasks[1].done[1].nick === "e3", "F11: el admin ve que la marcó el Modelo (e3)");
+  check(!!(await call(E[3], "task:done", { task: 2 })).error, "F11: no se marca dos veces");
+  check(!!(await call(E[0], "admin:taskDone", { team: 0, task: 1 })).error, "F11: un jugador no puede usar el control del admin");
+  check((await call(admin, "admin:taskDone", { team: 1, task: 2, done: false })).ok, "F11: el admin puede reabrir una tarea (por si el Modelo se equivocó)");
+  check((await call(admin, "admin:taskDone", { team: 0, task: 1 })).ok, "F11: el admin puede marcar terminada una tarea de un equipo");
+  check(!!(await call(admin, "admin:taskDone", { team: 0, task: 2 })).error, "F11: el admin no puede marcar una tarea que ese equipo no tiene");
+  await wait(150);
+  check(!E[3].last.tasks[1].done && E[0].last.tasks[0].done, "F11: el Modelo ve reflejados los cambios del admin");
+  await call(admin, "admin:pause", {}); await wait(80);
+  check(!!(await call(E[3], "task:done", { task: 1 })).error, "F11: en pausa no se marcan tareas");
+  await call(admin, "admin:pause", {});
+  const ex2 = await call(admin, "admin:export", {});
+  const t1 = ex2.data.tareas && ex2.data.tareas[0];
+  check(t1 && t1.texto === "Dibuja un pato" && t1.equipos.join() === "1,2" && t1.terminadas.length === 1 && t1.terminadas[0].marcadaPor === "Usuario", "F11: el historial descargado trae cada tarea, sus equipos y quién la terminó");
+
+  // F12: alerta al Modelo cuando la ventana de contexto le borra una instrucción del Usuario
+  await call(admin, "admin:reset", {}); await wait(100);
+  E.forEach((s) => s.close());
+  const lm = mk(), la = mk();
+  await up(lm); await call(lm, "hello", { browserId: "lm" }); await call(lm, "join", { nick: "LMod", role: "modelo" });
+  await up(la); await call(la, "hello", { browserId: "la" }); await call(la, "join", { nick: "LArn", role: "arnes" });
+  await call(admin, "admin:config", { limit: 100 }); await call(admin, "admin:start", {}); await wait(100);
+  await call(admin, "admin:prompt", { text: "Torre de 30 cm con 4 hojas.", team: 0, task: true }); // 27 caracteres · Tarea 1
+  await call(lm, "send", { text: "Haz 4 tubos de papel.", to: "arnes" }); await wait(150);
+  check(lm.last.usuario.lost === null, "F12: mientras la instrucción del Usuario cabe en la memoria, no hay alerta");
+  for (let i = 0; i < 3; i++) await call(lm, "send", { text: "Paso " + i + ": pega los tubos en cuadrado bien firmes", to: "arnes" });
+  await wait(150);
+  const lost = lm.last.usuario.lost;
+  check(!!lost && lost.total === 1 && lost.none === true, "F12: al olvidarse el encargo, el Modelo recibe la alerta (1 mensaje del Usuario, ya no queda ninguno)");
+  check(lost.tasks.join() === "1", "F12: la alerta sabe que lo olvidado es el enunciado de la Tarea 1");
+  check(lm.last.tasks.length === 1 && lm.last.tasks[0].id === 1, "F12: la Tarea 1 sigue en su lista (solo el número: el enunciado ya no lo tiene)");
+  check(!(lm.last.msgs || []).some((m) => m.role === "profesor"), "F12: (de verdad ya no está el encargo en su memoria)");
+  check(!!admin.last.teams[0].lostU && admin.last.teams[0].lostU.none, "F12: el admin también ve que ese Modelo olvidó su instrucción");
+  await call(admin, "admin:reply", { team: 0, text: "Es una torre de 30 cm." }); await wait(120);
+  check(lm.last.usuario.lost.none === false && lm.last.usuario.lost.total === 1, "F12: si el Usuario le vuelve a escribir, ya tiene una instrucción suya (none=false)");
+  // modo "recortar": perder solo una parte de la instrucción también avisa (una vez por mensaje)
+  await call(admin, "admin:reset", {}); await wait(100);
+  await call(lm, "hello", { browserId: "lm" }); await call(lm, "join", { nick: "LMod", role: "modelo" });
+  await call(la, "hello", { browserId: "la" }); await call(la, "join", { nick: "LArn", role: "arnes" });
+  await call(admin, "admin:config", { limit: 60, mode: "recortar" }); await call(admin, "admin:start", {}); await wait(100);
+  await call(admin, "admin:prompt", { text: "Torre de 30 cm con 4 hojas de papel.", team: 0 }); // 36
+  await call(lm, "send", { text: "Haz 4 tubos de papel bien firmes ya", to: "arnes" }); await wait(150); // 35 → recorta el encargo
+  const lost2 = lm.last.usuario.lost;
+  check(!!lost2 && lost2.total === 1 && lost2.none === false, "F12: en modo recortar, perder parte de la instrucción también avisa");
+  await call(lm, "send", { text: "Y luego otra capa", to: "arnes" }); await wait(150);
+  check(lm.last.usuario.lost.total === 1, "F12: el mismo mensaje recortado dos veces cuenta una sola vez");
+  lm.close(); la.close();
+
   ps.forEach((s) => { try { s.close(); } catch (_) {} }); admin.close();
   server.close();
   console.error(fails ? `\n${fails} prueba(s) de regresión fallaron` : "\nRegresión OK.");
