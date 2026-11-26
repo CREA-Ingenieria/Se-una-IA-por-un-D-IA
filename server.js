@@ -17,6 +17,9 @@ const WANTED_PORT = Number(process.env.PORT) || Number(FILE_CFG.puerto) || 80;
 const FALLBACK_PORT = 3000;
 let PORT = WANTED_PORT;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || FILE_CFG.claveAdmin || "crea2026";
+// Si se despliega detrás de un dominio/proxy (p. ej. GCP + Caddy), PUBLIC_URL hace que el QR y la
+// dirección que se muestra sean la URL pública real, no la IP interna del servidor.
+const PUBLIC_URL = (process.env.PUBLIC_URL || FILE_CFG.publicUrl || "").replace(/\/+$/, "");
 const NOMBRE = String(FILE_CFG.nombre || "seunaia").toLowerCase().replace(/[^a-z0-9-]/g, "") || "seunaia";
 const HOTSPOT = process.argv.includes("--hotspot") ? { nombre: FILE_CFG.hotspotNombre || "SeUnaIA-CREA", clave: FILE_CFG.hotspotClave || "crea2026ia" } : null;
 let MDNS = { ok: false, host: NOMBRE + ".local" };
@@ -269,9 +272,10 @@ const findByNick = (nick) => Object.values(S.persons).find((p) => p.nick.toLower
 
 // ---------- Rotación ----------
 function seated() {
-  // personas CONECTADAS, sentadas en un PC con equipo; ellas rotan entre esos PCs.
-  // Las offline no entran a la rotación (no podrían marcar "ya llegué" y la congelarían): se quedan en su puesto.
-  return devList().filter((d) => d.team !== null && d.personId && S.persons[d.personId] && S.persons[d.personId].online);
+  // TODAS las personas sentadas en un PC con equipo (online u offline) rotan.
+  // En un taller los celulares se duermen; igual deben recibir su nuevo puesto y verlo al despertar.
+  // El deadlock se evita con la gracia + el tope de tiempo en checkRotationDone/el reloj, no excluyendo gente.
+  return devList().filter((d) => d.team !== null && d.personId && S.persons[d.personId]);
 }
 function computeAssignment(level) {
   const devs = seated();
@@ -431,6 +435,11 @@ function adminView() {
 // ---------- Cómo entran los iPads ----------
 function acceso() {
   const port = PORT === 80 ? "" : ":" + PORT;
+  // desplegado tras un dominio/proxy: la URL pública manda (el QR y la dirección mostrada)
+  if (PUBLIC_URL) {
+    const host = PUBLIC_URL.replace(/^https?:\/\//, "");
+    return { host, url: PUBLIC_URL, mdns: false, ips: [{ ip: host, url: PUBLIC_URL, hotspot: false }], qrUrl: PUBLIC_URL, hotspot: HOTSPOT ? { nombre: HOTSPOT.nombre } : null };
+  }
   const ips = red.ipv4s().map((i) => ({ ip: i.address, url: `http://${i.address}${port}`, hotspot: red.isHotspotIp(i.address) }));
   // con hotspot, la IP del hotspot primero; si no, las demás primero
   ips.sort((a, b) => (HOTSPOT ? b.hotspot - a.hotspot : a.hotspot - b.hotspot));

@@ -72,16 +72,18 @@ const phaseOf = (s) => s.last && s.last.phase;
   const httpStatus = await fetch(URL + "/export?token=x").then((r) => r.status).catch(() => "err");
   check(httpStatus === 404, "F6: el endpoint HTTP /export ya no existe (status " + httpStatus + ")");
 
-  // F7: rotar con TODOS offline se rechaza y NO avanza la ronda (nada de rotación vacía)
+  // F7: los jugadores OFFLINE también rotan (un celular dormido NO se queda en su puesto). Era el bug visto en vivo.
   await call(admin, "admin:reset", {}); await wait(100);
   const g = [];
   for (let i = 0; i < 3; i++) { const s = mk(); await up(s); await call(s, "hello", { browserId: "g-" + i }); await call(s, "join", { nick: "g" + i, role: roles[i] }); g.push(s); }
-  await call(admin, "admin:start", {}); await wait(100);
-  const roundBefore = admin.last.round;
-  g.forEach((s) => s.close()); await wait(300);
-  check(!!(await call(admin, "admin:rotate", {})).error, "F7: rotar con todos offline es rechazado");
-  await wait(100);
-  check(admin.last.round === roundBefore, "F7: la ronda no avanzó (no hubo rotación vacía)");
+  await call(admin, "admin:start", {}); await wait(120);
+  const seatBefore = {}; admin.last.devices.forEach((d) => { if (d.nick) seatBefore[d.nick] = d.pc; });
+  g.forEach((s) => s.close()); await wait(300); // los 3 celulares se "duermen" (offline)
+  check((await call(admin, "admin:rotate", {})).ok, "F7: se puede rotar aunque los celulares estén offline");
+  let rotDone = false; for (let k = 0; k < 40 && !rotDone; k++) { await wait(100); rotDone = admin.last.phase === "activity"; }
+  check(rotDone, "F7: la rotación se completa sola pasada la gracia (no se congela)");
+  const seatAfter = {}; admin.last.devices.forEach((d) => { if (d.nick) seatAfter[d.nick] = d.pc; });
+  check(["g0", "g1", "g2"].every((n) => seatAfter[n] != null && seatAfter[n] !== seatBefore[n]), "F7: cada jugador offline cambió de puesto (rotó, no se quedó en el mismo)");
 
   // F8: tablero físico (fila+columna). Puestos por orden de llegada, mapeo row-major.
   await call(admin, "admin:reset", {}); await wait(100);
