@@ -10,6 +10,11 @@ process.env.SEUNAIA_SIN_MDNS = "1";
 process.env.SEUNAIA_ROT_GRACE_MS = "800";
 process.env.SEUNAIA_ROT_SAFETY_MS = "4000";
 process.env.SEUNAIA_READY_COOLDOWN_MS = "300";
+// Modo de UNA sala: cubre la compatibilidad (clientes y bots que no mandan la sala). Las salas simultáneas
+// se prueban en test/salas.js y el smoke corre en la Sala 2 de un servidor de 3 salas.
+process.env.SEUNAIA_SALAS = "1";
+// carpeta de datos temporal: las pruebas no tocan los respaldos de una actividad real
+process.env.SEUNAIA_DATA = require("fs").mkdtempSync(require("path").join(require("os").tmpdir(), "seunaia-regresion-"));
 process.argv.push("--nueva");
 const { server } = require("../server.js");
 const { io } = require("socket.io-client");

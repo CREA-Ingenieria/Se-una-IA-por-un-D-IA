@@ -13,7 +13,8 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.js && node test/regresion.js",
+    "test": "node test/smoke.js && node test/regresion.js && node test/salas.js",
+    "test:salas": "node test/salas.js",
     "test:smoke": "node test/smoke.js",
     "test:regresion": "node test/regresion.js"
   },

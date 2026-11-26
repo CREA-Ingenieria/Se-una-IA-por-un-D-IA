@@ -1,9 +1,10 @@
 // Jugadores de prueba para ensayar sin gente.
-// Uso: node tools/bots.js [cantidad=7] [url=http://localhost]
+// Uso: node tools/bots.js [cantidad=7] [url=http://localhost] [sala=1]
 // Entran repartidos entre los 3 roles, responden en su canal y marcan LISTO al rotar.
 const { io } = require("socket.io-client");
 const N = Number(process.argv[2]) || 7;
 const URL = process.argv[3] || "http://localhost";
+const SALA = process.argv[4] || "1"; // con varias salas, a cuál entran los bots
 const ROLES = ["modelo", "arnes", "revisor"];
 const LINES = {
   modelo: ["1. Corta 6 palitos de 10 cm. 2. Une 3 en triángulo.", "Pon una segunda capa encima del tablero.", "Dobla 3 tallarines en arco bajo el centro."],
@@ -18,7 +19,7 @@ const REPORT_MS = 15000;
 for (let i = 0; i < N; i++) {
   const role = ROLES[i % ROLES.length], s = io(URL, { forceNew: true });
   let seen = new Set(), line = 0, joined = false, readySent = false, lastReport = 0;
-  s.on("connect", () => s.emit("hello", { browserId: "bot-" + i }, () => {
+  s.on("connect", () => s.emit("hello", { sala: SALA, browserId: "bot-s" + SALA + "-" + i }, () => {
     if (!joined) s.emit("join", { nick: "bot" + (i + 1), role }, () => (joined = true));
   }));
   s.on("view", (v) => {

@@ -3,6 +3,11 @@
 process.env.PORT = process.env.PORT || "3999";
 process.env.SEUNAIA_SIN_MDNS = "1";
 process.env.SEUNAIA_READY_COOLDOWN_MS = "0"; // el smoke marca listo al instante; el cooldown se prueba en regresion
+// servidor de 3 salas; todo el flujo corre en la Sala 2 (no la primera) para probar que cualquier sala funciona igual
+process.env.SEUNAIA_SALAS = "3";
+const SALA = "2";
+// carpeta de datos temporal: las pruebas no tocan los respaldos de una actividad real
+process.env.SEUNAIA_DATA = require("fs").mkdtempSync(require("path").join(require("os").tmpdir(), "seunaia-smoke-"));
 process.argv.push("--nueva");
 const { server, makeQuestion } = require("../server.js");
 const { io } = require("socket.io-client");
@@ -20,21 +25,21 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
     const s = io(URL, { forceNew: true });
     s.last = null; s.on("view", (v) => (s.last = v));
     await new Promise((r) => s.on("connect", r));
-    await call(s, "hello", { browserId: "ipad-" + i });
+    await call(s, "hello", { sala: SALA, browserId: "ipad-" + i });
     const r = await call(s, "join", { nick: "p" + i, role: roles[i] });
     check(r.ok, `iPad ${i} entra como ${roles[i]}`);
     pads.push(s);
   }
   const otroThinking = io(URL, { forceNew: true });
   await new Promise((r) => otroThinking.on("connect", r));
-  await call(otroThinking, "hello", { browserId: "ipad-thinking" });
+  await call(otroThinking, "hello", { sala: SALA, browserId: "ipad-thinking" });
   check((await call(otroThinking, "join", { nick: "tk", role: "thinking" })).error, "el rol Thinking ya no existe");
   otroThinking.close();
   const admin = io(URL, { forceNew: true });
   admin.last = null; admin.on("view", (v) => (admin.last = v));
   await new Promise((r) => admin.on("connect", r));
-  check((await call(admin, "admin:login", { password: "mala" })).error, "clave incorrecta rechazada");
-  check((await call(admin, "admin:login", { password: process.env.ADMIN_PASSWORD || "crea2026" })).ok, "admin entra");
+  check((await call(admin, "admin:login", { sala: SALA, password: "mala" })).error, "clave incorrecta rechazada");
+  check((await call(admin, "admin:login", { sala: SALA, password: process.env.ADMIN_PASSWORD || "crea2026" })).ok, "admin entra");
   await wait(100);
   check(admin.last.teams.length === 2, "se arman 2 equipos solos");
   check((await call(pads[0], "admin:start", {})).error, "un iPad no puede iniciar");
@@ -163,7 +168,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   // --- reconexión por nickname ---
   const otro = io(URL, { forceNew: true });
   await new Promise((r) => otro.on("connect", r));
-  await call(otro, "hello", { browserId: "otro-ipad" });
+  await call(otro, "hello", { sala: SALA, browserId: "otro-ipad" });
   check((await call(otro, "join", { nick: "P1", role: "modelo" })).error, "no se puede usar el nickname de alguien conectado");
   const pc5 = pads[5].last.you.pc;
   pads[5].close();
@@ -171,7 +176,7 @@ const check = (ok, msg) => { console.log((ok ? "  ok   " : "  FALLA ") + msg); i
   const nuevo = io(URL, { forceNew: true });
   nuevo.last = null; nuevo.on("view", (v) => (nuevo.last = v));
   await new Promise((r) => nuevo.on("connect", r));
-  await call(nuevo, "hello", { browserId: "ipad-reemplazo" });
+  await call(nuevo, "hello", { sala: SALA, browserId: "ipad-reemplazo" });
   const rc = await call(nuevo, "reclaim", { nick: "p5" });
   await wait(100);
   check(rc.ok && nuevo.last.you.pc === pc5 && nuevo.last.you.nick === "p5", "p5 vuelve a su PC " + pc5 + " desde otro iPad");

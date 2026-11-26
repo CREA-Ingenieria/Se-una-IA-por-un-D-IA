@@ -53,6 +53,19 @@ La clave por defecto es `crea2026`. Cámbiala antes de usarlo con estudiantes:
 - Edita `config.json` (lo crea `INSTALAR.bat`): `{ "claveAdmin": "otraclave", "nombre": "seunaia", "puerto": 80 }`.
 - O usa variables de entorno, que tienen prioridad: `ADMIN_PASSWORD=otraclave PORT=8080 npm start` (en PowerShell: `$env:ADMIN_PASSWORD="otraclave"; npm start`).
 
+### Varias salas a la vez (misma dirección)
+
+Un solo servidor sostiene **3 salas simultáneas** por defecto, cada una con su propio admin. Las salas no se mezclan en nada: cada una tiene sus equipos, sus mensajes, su cola y su conversación con el Usuario, su rotación, su minijuego, sus archivos, su "Nueva sesión" y su respaldo (`data/sala-N/sesion.json`).
+
+- **Jugadores**: el QR de cada sala ya trae la sala (`…/?sala=2`). Quien abre la dirección sin sala ve un selector *¿En qué sala estás?*. Un celular juega en **una sola sala**: si luego abre el QR de otra, vuelve a la suya. Los nicknames son únicos dentro de cada sala (dos salas pueden tener a una "ana").
+- **Admins**: cada uno entra a `/admin?sala=N` (o a `/admin` y escoge su sala). El nombre de la sala aparece arriba del panel y en la pestaña. Para cambiar de sala: *Cambiar de sala* (pide la clave de la otra sala si no ha entrado antes).
+- **QR para proyectar**: `/conectar?sala=N` muestra el QR de esa sala (el botón del panel ya abre el de su sala); `/conectar` muestra un QR por cada sala.
+- **Cuántas salas**: `"salas": 3` en `config.json` o `SEUNAIA_SALAS=3` (de 1 a 10). Con `1` funciona como antes, sin selector.
+- **Clave por sala (opcional)**: por defecto todas usan la clave general. Para que cada admin tenga la suya: `"clavesSalas": { "1": "clave1", "2": "clave2", "3": "clave3" }` en `config.json`, o `ADMIN_PASSWORD_1=…`, `ADMIN_PASSWORD_2=…`. La clave (y la sesión guardada) de una sala no abre otra.
+- **Nombres (opcional)**: `"nombresSalas": { "1": "Sala Norte" }`. Por defecto "Sala 1", "Sala 2"…
+- **Capacidad**: hasta 30 equipos (~90 personas) por sala. Probado con 3 salas × 72 jugadores a la vez (216 en total) con 3 rotaciones cada una: la peor rotación tardó ~0,37 s. Con tantos celulares, el límite real es la red WiFi: el hotspot de Windows solo acepta 8 dispositivos, así que para varias salas usa un router propio o la red de la universidad (o el despliegue en la nube con `PUBLIC_URL`).
+- **Datos**: `SEUNAIA_DATA=/otra/carpeta` cambia dónde se guardan los respaldos y archivos (las pruebas lo usan para no tocar los de la actividad).
+
 ### Cómo entran los iPads: seunaia.local y códigos QR
 
 **La forma que funciona siempre es el QR.** En la prueba en la universidad, el nombre `seunaia.local` no abrió y el QR sí.
@@ -165,10 +178,11 @@ Con el servidor corriendo, en otra terminal:
 
 ```bash
 npm install
-node tools/bots.js 7 http://localhost
+node tools/bots.js 7 http://localhost        # a la Sala 1
+node tools/bots.js 7 http://localhost 2      # a la Sala 2
 ```
 
-Entran 7 jugadores de prueba que responden en su canal y marcan listo al rotar. Tú entras desde el navegador como el octavo.
+Entran 7 jugadores de prueba que responden en su canal y marcan listo al rotar. Tú entras desde el navegador como el octavo. Para probar carga en varias salas a la vez, corre un `tools/carga.js` por sala (el último argumento es la sala): `node tools/carga.js 24 3 http://localhost 2`.
 
 Para revisar las reglas principales (canales, cola, enfriamiento, contexto, minijuego, rotación) sin abrir el navegador:
 
@@ -179,7 +193,7 @@ npm test
 ## Estructura
 
 ```
-server.js          servidor: estado, permisos por canal, ventana de contexto, rotación, minijuego
+server.js          servidor: salas (createRoom), permisos por canal, ventana de contexto, rotación, minijuego
 public/index.html  página única para iPads (/) y admin (/admin)
 public/app.js      interfaz del cliente
 public/styles.css  estilos (paleta CREA)
@@ -193,21 +207,21 @@ tools/firewall.ps1 abre el puerto en el firewall de Windows
 tools/*.ps1, *.js  descargas (Node.js, tipografías) y empaquetado del zip
 INSTALAR.bat       instalación en Windows
 INICIAR.bat        arranque con menú red actual / hotspot
-test/smoke.js      prueba automática del flujo completo
-data/              respaldo de la sesión (se crea solo)
+test/smoke.js      prueba automática del flujo completo (en la Sala 2 de un servidor de 3 salas)
+test/regresion.js  regresión del rediseño de dinámica (modo 1 sala: compatibilidad)
+test/salas.js      salas simultáneas: aislamiento entre salas, claves y tokens por sala
+data/sala-N/       respaldo y archivos de cada sala (se crea solo)
 ```
 
 ## Exportar el historial
 
 En el panel admin (en vivo o en el resumen) el botón **Descargar historial** baja un JSON con los chats de cada equipo, los roles por los que pasó cada persona y la config. Incluye lo que sigue en la ventana de contexto de cada equipo; lo que ya se olvidó no se guarda. La descarga va por el socket ya autenticado del admin (no expone ninguna clave en la URL).
 
-## Dos salas simultáneas (pendiente, fuera de esta versión)
-
-Hoy el servidor sostiene **una** sala. Para dos salas al mismo tiempo, la vía de menor riesgo es correr **dos procesos** en dos puertos con carpetas de datos separadas (p. ej. `PORT=80` y `PORT=81` con `DATA` distinta). Queda para una siguiente iteración.
+El archivo se llama `seunaia-sala<N>-<sesión>.json` cuando hay varias salas, y trae solo los chats de esa sala.
 
 ## Pendiente para la siguiente versión
 
-- **Dos salas simultáneas** (ver arriba).
+- `INSTALAR.bat` todavía no pregunta cuántas salas ni una clave por sala: por ahora se ajusta a mano en `config.json` (ver *Varias salas a la vez*).
 - Pre-crear la grilla de puestos numerada por equipo desde el admin (hoy la numeración es por orden de llegada).
 - Modo de contexto **por canal** (la especificación lo menciona; hoy solo existe "global por equipo").
 - Probar con celulares reales de la sala y con la red de la universidad.

@@ -73,7 +73,24 @@ function browserId() {
 }
 
 const L = { view: null, connected: false, err: "", toast: null, answer: null, adminTeam: null, confirm: null, hintUntil: 0, lastRole: null, seen: new Set(), lastHtml: "", firstPaint: true,
-  to: null, rulesOpen: true, picking: false, sending: false, skew: 0 };
+  to: null, rulesOpen: true, picking: false, sending: false, skew: 0,
+  // sala: la sala de este teléfono/admin (viaja en la dirección: ?sala=2) · salas: las que tiene el servidor
+  sala: new URLSearchParams(location.search).get("sala") || null, salas: [] };
+
+// ---------- Salas simultáneas ----------
+// El QR de cada sala trae ?sala=N. Sin sala, el teléfono escoge en un selector y el admin al entrar.
+const multiSala = () => L.salas.length > 1;
+const adminKey = (sala) => "seunaia-admin-" + (sala || "1"); // un token de admin por sala
+function setSala(id) {
+  L.sala = id || null;
+  if (L.salas.length === 1) return; // con una sola sala la dirección queda limpia
+  try {
+    const u = new URL(location.href);
+    if (L.sala) u.searchParams.set("sala", L.sala); else u.searchParams.delete("sala");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  } catch (_) { /* navegador sin URL/history: la sala sigue en memoria */ }
+}
+const salaQ = () => (L.sala && multiSala() ? "?sala=" + encodeURIComponent(L.sala) : "");
 // segundos que faltan para un instante del reloj del servidor
 const secsTo = (at) => Math.max(0, Math.ceil((at - (Date.now() + L.skew)) / 1000));
 const socket = io({ reconnectionDelay: 800, reconnectionDelayMax: 4000 });
@@ -87,12 +104,36 @@ function emit(ev, data) {
   }));
 }
 
+// El teléfono saluda con su sala. Si ya juega en otra, el servidor lo devuelve a esa; si no tiene sala, escoge.
+function hello() {
+  emit("hello", { browserId: browserId(), sala: L.sala }).then((r) => {
+    if (!r.ok) return;
+    if (r.salas) L.salas = r.salas;
+    if (r.sala && L.sala && r.sala !== L.sala) toast(`Este teléfono ya está jugando en la ${r.salaName}.`);
+    setSala(r.sala);
+    if (!r.sala) { L.view = { kind: "pick" }; render(); }
+  });
+}
+// el admin vuelve a entrar solo si ya tiene un token de esa sala
+function tryToken(sala) {
+  const token = sala && store.get(adminKey(sala));
+  if (!token) return;
+  // si el token ya no sirve (p. ej. el servidor se reinició), vuelve a pedir la clave en vez de dejar un panel congelado
+  emit("admin:login", { token, sala }).then((r) => { if (!r.ok) { store.del(adminKey(sala)); if (L.view && L.view.kind === "admin") L.view = null; render(); } });
+}
 socket.on("connect", () => {
   L.connected = true;
+  if (!IS_ADMIN) hello(); // el admin espera la lista de salas (llega al conectar) para entrar
+  render();
+});
+// el servidor manda sus salas en CADA conexión (también al reconectar). Cada conexión es un socket nuevo sin
+// sala, así que el admin siempre vuelve a entrar con el token de su sala (si no, quedaría un panel congelado).
+socket.on("salas", (list) => {
+  L.salas = Array.isArray(list) ? list : [];
   if (IS_ADMIN) {
-    const token = store.get("seunaia-admin");
-    if (token) emit("admin:login", { token }).then((r) => { if (!r.ok) { store.del("seunaia-admin"); render(); } });
-  } else socket.emit("hello", { browserId: browserId() });
+    if (!L.sala && L.salas.length === 1) setSala(L.salas[0].id);
+    tryToken(L.sala);
+  }
   render();
 });
 socket.on("disconnect", () => { L.connected = false; render(); });
@@ -114,7 +155,7 @@ socket.on("view", (v) => {
 socket.on("released", () => {
   store.del("seunaia-device");
   L.view = null;
-  socket.emit("hello", { browserId: browserId() });
+  hello();
   toast("El admin liberó tu puesto. Entra con tu nickname para volver a él.");
 });
 
@@ -134,13 +175,35 @@ function topbar(extra = "") {
 }
 
 // ---------- Vistas de los PCs ----------
+// nombre de la sala (solo cuando el servidor tiene varias)
+const salaTag = (v) => (v && v.sala && v.sala.multi ? `<span class="pill" style="background:var(--t);color:#000">${esc(v.sala.name.toUpperCase())}</span>` : "");
+const lockup = (delay) => `<h1 class="lockup anim" style="animation-delay:${delay}s" aria-label="Sé una IA por un día"><span class="lines"><span class="dots">SÉ UNA</span><span class="dots">POR UN D-</span></span><span class="dots ia">IA</span></h1>`;
+// Selector de sala: lo ve quien abre la dirección sin ?sala (el QR de cada sala ya la trae)
+function vPick() {
+  const fase = { lobby: "esperando", activity: "en curso", rotate: "en curso", end: "terminó" };
+  const btns = L.salas.map((s) => `<button type="button" class="btn white" style="min-height:72px;flex-direction:column;gap:2px;display:flex;align-items:center;justify-content:center" data-act="sala" data-sala="${esc(s.id)}"${L.connected ? "" : " disabled"}>
+      <b style="font-size:18px;letter-spacing:.08em">${esc(s.name.toUpperCase())}</b><span style="font-size:12px;font-weight:500;opacity:.7">${esc(fase[s.phase] || "")}${s.online ? ` · ${s.online} conectados` : ""}</span></button>`).join("");
+  return `<div class="landing">
+  <div class="top anim">${logos()}</div>
+  <div class="center">
+    ${lockup(0.05)}
+    <div class="joinbox anim" style="animation-delay:.2s">
+      <span class="field"><span>¿EN QUÉ SALA ESTÁS?</span></span>
+      <div class="roles">${btns || `<span class="muted">Cargando salas…</span>`}</div>
+      <p class="muted" style="margin:0;font-size:13px;text-align:center">Tu profesor te dice cuál. Si escaneas el QR de tu sala, entras directo.</p>
+      <a class="btn dark" style="align-self:center;display:inline-flex;align-items:center;text-decoration:none" href="/admin">Soy el admin</a>
+    </div>
+  </div></div>`;
+}
 function vLanding() {
   const late = L.view && L.view.phase !== "lobby";
+  const sala = L.view && L.view.sala && L.view.sala.multi ? L.view.sala : null;
   return `<div class="landing">
   <div class="top anim">${logos()}</div>
   <div class="center">
     <div class="rings anim" style="animation-delay:.05s"><span class="ring"><i style="background:var(--m)"></i></span><span class="ring"><i style="background:var(--a)"></i></span><span class="ring"><i style="background:var(--r)"></i></span><span class="tp">3 personas · 1 agente</span></div>
-    <h1 class="lockup anim" style="animation-delay:.12s" aria-label="Sé una IA por un día"><span class="lines"><span class="dots">SÉ UNA</span><span class="dots">POR UN D-</span></span><span class="dots ia">IA</span></h1>
+    ${lockup(0.12)}
+    ${sala ? `<div class="row anim" style="animation-delay:.2s;justify-content:center;gap:10px">${salaTag(L.view)}<button type="button" class="btn dark sm" data-act="changeSala">Cambiar de sala</button></div>` : ""}
     <form class="joinbox anim" style="animation-delay:.3s" data-submit="noop">
       <label class="field"><span>TU NICKNAME</span><input class="input" id="nick" maxlength="16" autocomplete="off" autocapitalize="off" placeholder="robotina_42"></label>
       <span class="field"><span>ESCOGE EL ROL DE TU MESA</span></span>
@@ -148,7 +211,7 @@ function vLanding() {
       <div class="err" role="status">${esc(L.err || (late ? "La actividad ya empezó: entra y el admin te asignará a un equipo." : ""))}</div>
       <div class="back"><span>¿Ya estabas jugando y se te cerró o cambiaste de iPad?</span>
         <button type="button" class="btn white sm" data-act="reclaim"${L.connected ? "" : " disabled"}>Volver a mi puesto con este nickname</button></div>
-      <a class="btn dark" style="align-self:center;display:inline-flex;align-items:center;text-decoration:none" href="/admin">Soy el admin</a>
+      <a class="btn dark" style="align-self:center;display:inline-flex;align-items:center;text-decoration:none" href="/admin${salaQ()}">Soy el admin</a>
     </form>
   </div>
   <section class="authors anim" style="animation-delay:.45s" aria-label="Autoría">
@@ -161,7 +224,7 @@ function vLanding() {
 function vWaiting(v) {
   const r = v.you.role;
   const unassigned = v.you.team === null;
-  return `${topbar(`<span class="muted" style="font-size:13px">Sesión ${esc(v.code)}</span>`)}<div class="stage">
+  return `${topbar(`${salaTag(v)}<span class="muted" style="font-size:13px">Sesión ${esc(v.code)}</span>`)}<div class="stage">
     <span class="muted" style="font-size:12px;letter-spacing:.3em;font-weight:600">TU PUESTO: ${esc(whereL(v.you.where))}${v.you.nick ? " · " + esc(v.you.nick) : ""}</span>
     ${rolePill(r, "ERES " + ARTICLE[r])}
     <div class="phrase" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</div>
@@ -283,7 +346,7 @@ function vRotate(v) {
   const w = o && o.where ? o.where : null;
   const big = w ? w.label : (o ? "PC " + o.toPc : "");
   const sub = w && w.row != null ? `FILA ${esc(w.row)} · COLUMNA ${esc(w.col)}` : "";
-  return `${topbar()}<div class="stage rotate">
+  return `${topbar(salaTag(v))}<div class="stage rotate">
     ${o ? `<div class="go">${esc(o.nick)}, levántate y ve a tu puesto</div><div class="divider"></div>
       <span class="muted" style="font-size:13px;font-weight:600;letter-spacing:.3em">AHORA ERES</span>
       ${rolePill(o.toRole, ARTICLE[o.toRole])}
@@ -301,6 +364,7 @@ function vRotate(v) {
 }
 
 function vDevice(v) {
+  if (v && v.kind === "pick") return vPick();
   if (!v || !v.registered) return vLanding();
   if (v.phase === "end") return `${topbar()}<div class="stage"><span class="big" style="font-size:clamp(60px,12vw,140px)">FIN</span><p class="muted">Gracias por ser una IA por un día.</p></div>`;
   if (v.phase === "rotate" && v.rotation && (v.rotation.outgoing || v.rotation.me)) return vRotate(v);
@@ -310,8 +374,15 @@ function vDevice(v) {
 
 // ---------- Panel admin ----------
 function vLogin() {
-  return `<div class="stage"><div class="card anim" style="background:#fff;color:#000;padding:28px;width:min(380px,100%);display:flex;flex-direction:column;gap:16px;align-items:center;border-radius:28px">
+  // con varias salas, el admin escoge la suya (cada sala tiene su admin, su gente y su cola)
+  const salaSel = multiSala() ? `<div class="field" style="width:100%"><span style="color:#2e2e2e">TU SALA</span>
+      <div class="row" style="justify-content:center;gap:8px;flex-wrap:wrap" role="group" aria-label="Sala">${L.salas.map((s) => {
+        const on = L.sala === s.id;
+        return `<button type="button" class="btn sm" style="background:${on ? "var(--y)" : "#EEF1F5"};color:#000;border:1px solid ${on ? "var(--y)" : "#d5d9e0"}" aria-pressed="${on}" data-act="loginSala" data-sala="${esc(s.id)}">${esc(s.name)}</button>`;
+      }).join("")}</div></div>` : "";
+  return `<div class="stage"><div class="card anim" style="background:#fff;color:#000;padding:28px;width:min(420px,100%);display:flex;flex-direction:column;gap:16px;align-items:center;border-radius:28px">
     <img class="logo-crea" src="/assets/crea.png" alt="CREA"><h1 class="h1" style="font-size:34px">MODO ADMIN</h1>
+    ${salaSel}
     <form data-submit="login" style="width:100%;display:flex;flex-direction:column;gap:12px">
       <label class="field"><span style="color:#2e2e2e">CLAVE DE LA SESIÓN</span><input class="input" id="pw" type="password" style="background:#EEF1F5;color:#000;border-color:#d5d9e0" autocomplete="current-password"></label>
       <div class="row" style="justify-content:center"><a class="btn dark" style="display:inline-flex;align-items:center;text-decoration:none" href="/">Volver</a><button class="btn" style="background:var(--y)"${L.connected ? "" : " disabled"}>Entrar</button></div>
@@ -376,11 +447,14 @@ function boardPreview(v) {
     <div class="tablewrap"><div class="board" style="grid-template-columns:repeat(${b.cols},minmax(56px,1fr))">${cells}</div></div>`;
 }
 function vAdmin(v) {
-  const head = (title, right) => `${topbar(`<span class="lbl" style="font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--y)">PANEL ADMIN · ${esc(v.code)}</span>`)}<div class="admhead"><h1 class="h1" style="font-size:34px;color:var(--y)">${title}</h1><div class="row">${right}</div></div>`;
+  const multi = v.sala && v.sala.multi;
+  // con varias salas, el nombre de la sala va siempre arriba para que ningún admin se confunda de panel
+  const salaHead = multi ? `${salaTag(v)}<a class="btn dark sm" style="display:inline-flex;align-items:center;text-decoration:none" href="/admin" title="Entrar al panel de otra sala">Cambiar de sala</a>` : "";
+  const head = (title, right) => `${topbar(`<span class="lbl" style="font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--y)">PANEL ADMIN · ${esc(v.code)}</span>${salaHead}`)}<div class="admhead"><h1 class="h1" style="font-size:34px;color:var(--y)">${multi ? esc(v.sala.name.toUpperCase()) + " · " : ""}${title}</h1><div class="row">${right}</div></div>`;
   const resetBtn = `<button class="btn dark" data-act="reset">${L.confirm === "reset" ? "¿Seguro? Se borra todo" : "Nueva sesión"}</button>`;
   const exportBtn = `<button class="btn dark" data-act="export" title="Descarga los chats de la sesión en JSON para analizarlos">Descargar historial</button>`;
   const ac = v.acceso;
-  const connBtn = `<a class="btn dark" style="display:inline-flex;align-items:center;text-decoration:none" href="/conectar" target="_blank" rel="noopener">Pantalla de conexión (QR) ↗</a>`;
+  const connBtn = `<a class="btn dark" style="display:inline-flex;align-items:center;text-decoration:none" href="/conectar${multi ? "?sala=" + encodeURIComponent(v.sala.id) : ""}" target="_blank" rel="noopener">Pantalla de conexión (QR) ↗</a>`;
   const accessCard = ac ? `<div class="card" style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:10px 24px;align-items:center">
     <span class="muted" style="font-size:12px;font-weight:600;letter-spacing:.14em">LOS IPADS ENTRAN CON EL QR O EN</span>
     <b class="dots" style="font-size:28px;color:var(--t)">${esc(ac.qrUrl.replace("http://", ""))}</b>
@@ -501,8 +575,12 @@ function render() {
   if (IS_ADMIN) html = L.view && L.view.kind === "admin" ? vAdmin(L.view) : vLogin();
   else html = L.view ? vDevice(L.view) : `<div class="stage"><div class="spin"></div><p class="muted">Conectando con el servidor…</p></div>`;
   // la landing muestra la autoría en grande; las demás pantallas, pequeña al pie
-  const onLanding = !IS_ADMIN && L.view && !L.view.registered;
+  const onLanding = !IS_ADMIN && L.view && L.view.kind !== "pick" && !L.view.registered;
   if (!onLanding) html += credits();
+  // la pestaña dice la sala: útil si alguien tiene abiertos los paneles de varias salas
+  const sv = L.view && L.view.sala && L.view.sala.multi ? L.view.sala.name + " · " : "";
+  const title = sv + (IS_ADMIN ? "Admin · " : "") + "Sé una IA por un d-IA";
+  if (document.title !== title) document.title = title;
 
   if (html !== L.lastHtml) {
     const next = document.createElement("div");
@@ -543,6 +621,12 @@ document.addEventListener("click", async (e) => {
     if (r.ok) { if (r.reclaimed) toast(`Volviste a tu puesto: PC ${r.pc}.`); fresh(); }
     return;
   }
+  // el teléfono escoge su sala en el selector
+  if (act === "sala") { setSala(el.dataset.sala); L.view = null; hello(); render(); return; }
+  // volver al selector (solo antes de entrar a jugar): página nueva, sin sala
+  if (act === "changeSala") { location.assign("/"); return; }
+  // el admin escoge su sala; si ya tiene token de esa sala entra solo
+  if (act === "loginSala") { setSala(el.dataset.sala); tryToken(L.sala); render(); const pw = $("#pw"); if (pw) pw.focus(); return; }
   if (act === "to") { L.to = el.dataset.to; render(); $("#msg") && !$("#msg").disabled && $("#msg").focus(); return; }
   if (act === "endLive") { await emit("admin:endLive"); return; }
   if (act === "deliver") { const r = await emit("arnes:deliver"); if (r.ok) toast("Avisaste al Modelo que el trabajo está listo."); return; }
@@ -553,7 +637,7 @@ document.addEventListener("click", async (e) => {
       const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "seunaia-" + (r.data.sesion || "sesion") + ".json";
+      a.download = "seunaia-" + (r.data.sala && multiSala() ? "sala" + r.data.sala + "-" : "") + (r.data.sesion || "sesion") + ".json";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
       toast("Historial descargado.");
@@ -672,8 +756,9 @@ document.addEventListener("submit", async (e) => {
   e.preventDefault();
   const k = e.target.dataset.submit;
   if (k === "login") {
-    const r = await emit("admin:login", { password: $("#pw").value });
-    if (r.ok) { store.set("seunaia-admin", r.token); fresh(); } else { $("#pw").value = ""; }
+    if (multiSala() && !L.sala) { toast("Escoge primero tu sala."); return; }
+    const r = await emit("admin:login", { password: $("#pw").value, sala: L.sala });
+    if (r.ok) { setSala(r.sala || L.sala); store.set(adminKey(L.sala), r.token); fresh(); } else { $("#pw").value = ""; }
     return;
   }
   if (k === "send") {

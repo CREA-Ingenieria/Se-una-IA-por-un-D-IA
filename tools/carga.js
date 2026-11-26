@@ -1,18 +1,20 @@
 // Prueba de carga: simula muchos jugadores reales (un teléfono por persona) y varias rotaciones,
 // para verificar que el servidor sostiene ~70-80 personas sin atrasarse ni caerse.
-// Uso: node tools/carga.js [equipos=24] [rondas=3] [url=http://localhost]
+// Uso: node tools/carga.js [equipos=24] [rondas=3] [url=http://localhost] [sala=1]
+// Para probar salas simultáneas, corre uno por sala a la vez (sala 1, 2 y 3).
 const { io } = require("socket.io-client");
 const ROLES = ["modelo", "arnes", "revisor"];
 const TEAMS = Number(process.argv[2]) || 24;
 const ROUNDS = Number(process.argv[3]) || 3;
 const URL = process.argv[4] || "http://localhost";
+const SALA = process.argv[5] || "1";
 const N = TEAMS * 3;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const call = (s, ev, data) => new Promise((r) => s.timeout(8000).emit(ev, data || {}, (err, res) => r(err ? { error: "timeout" } : res || {})));
 const now = () => Number(process.hrtime.bigint() / 1000000n);
 
 (async () => {
-  console.log(`Carga: ${N} jugadores (${TEAMS} equipos), ${ROUNDS} rondas → ${URL}`);
+  console.log(`Carga: ${N} jugadores (${TEAMS} equipos), ${ROUNDS} rondas → ${URL} · Sala ${SALA}`);
   const players = [];
   const t0 = now();
   // conexión + join de todos
@@ -20,7 +22,7 @@ const now = () => Number(process.hrtime.bigint() / 1000000n);
     const s = io(URL, { forceNew: true, reconnection: false });
     s.last = null; s.on("view", (v) => (s.last = v));
     await new Promise((r) => s.on("connect", r));
-    await call(s, "hello", { browserId: "load-" + i });
+    await call(s, "hello", { sala: SALA, browserId: "load-s" + SALA + "-" + i });
     const r = await call(s, "join", { nick: "L" + i, role: ROLES[i % 3] });
     if (r.error) { console.log(`  FALLA join ${i}: ${r.error}`); }
     players.push(s);
@@ -31,7 +33,7 @@ const now = () => Number(process.hrtime.bigint() / 1000000n);
   const admin = io(URL, { forceNew: true, reconnection: false });
   admin.last = null; admin.on("view", (v) => (admin.last = v));
   await new Promise((r) => admin.on("connect", r));
-  await call(admin, "admin:login", { password: process.env.ADMIN_PASSWORD || "crea2026" });
+  await call(admin, "admin:login", { sala: SALA, password: process.env.ADMIN_PASSWORD || "crea2026" });
   await wait(300);
   const teamsFormed = admin.last && admin.last.teams.length;
   console.log(`  equipos armados: ${teamsFormed} (esperado ${TEAMS})`);
