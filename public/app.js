@@ -54,6 +54,8 @@ const IS_ADMIN = location.pathname.replace(/\/+$/, "") === "/admin";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const mmss = (s) => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+// etiqueta física de un puesto: "B3" (tablero) o "PC 5" (sin tablero)
+const whereL = (w) => (w && w.label) ? w.label : "";
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
@@ -160,7 +162,7 @@ function vWaiting(v) {
   const r = v.you.role;
   const unassigned = v.you.team === null;
   return `${topbar(`<span class="muted" style="font-size:13px">Sesión ${esc(v.code)}</span>`)}<div class="stage">
-    <span class="muted" style="font-size:12px;letter-spacing:.3em;font-weight:600">ESTE ES EL PC ${v.you.pc}${v.you.nick ? " · " + esc(v.you.nick) : ""}</span>
+    <span class="muted" style="font-size:12px;letter-spacing:.3em;font-weight:600">TU PUESTO: ${esc(whereL(v.you.where))}${v.you.nick ? " · " + esc(v.you.nick) : ""}</span>
     ${rolePill(r, "ERES " + ARTICLE[r])}
     <div class="phrase" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</div>
     <div class="hintcard anim">${bean(r, "lg")}<div><b style="font-size:11px;letter-spacing:.14em;color:${RHEX[r]}">PISTA</b><p style="margin:4px 0 0;font-size:15px;line-height:1.45">${HINT[r]}</p></div></div>
@@ -250,7 +252,7 @@ function vChat(v) {
   } else compose = `<div class="ro">SOLO LECTURA · EJECUTA LO QUE DIGA EL MODELO</div>`;
   const hint = now < L.hintUntil ? `<div class="hintcard anim" style="width:100%;margin-bottom:14px">${bean(r, "lg")}<p style="margin:0;font-size:15px;line-height:1.45"><b>Ahora eres ${RN[r]}: ${esc(PHRASE[r])}.</b> ${HINT[r]}</p></div>` : "";
   // la pista y el aviso de olvido van en contenedores fijos, para que el resto de la pantalla no se mueva al actualizarla
-  return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">PC ${v.you.pc}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}<div class="slot-hint">${hint}</div>
+  return `${topbar(`${rolePill(r)}<span class="dots" style="font-size:26px">${esc(whereL(v.you.where))}</span><span class="muted">${esc(v.you.nick || "")}</span>`)}<div class="slot-hint">${hint}</div>
     <div class="pchead"><span class="phrase sm" style="color:${RC[r]}">${esc(RN[r])}: ${esc(PHRASE[r])}</span>
       <div class="hud"><span><b>${c.used}</b> / ${c.limit} CARACTERES${c.bonus ? ` <span class="muted">(base ${c.base})</span>` : ""}</span>${ctxBar(c.by || {}, c.limit, forgot ? "flash" : "")}${ctxLegend(c.by || {})}${c.bonus ? `<span class="bonus">${esc(c.bonusLog)} · total +${c.bonus}</span>` : ""}</div></div>
     <div class="pcgrid${live ? " live" : ""}"><section class="card chat${live ? " live" : ""}" aria-label="Chat">
@@ -277,11 +279,15 @@ function vMini(v) {
 
 function vRotate(v) {
   const R = v.rotation, o = R.outgoing;
+  const w = o && o.where ? o.where : null;
+  const big = w ? w.label : (o ? "PC " + o.toPc : "");
+  const sub = w && w.row != null ? `FILA ${esc(w.row)} · COLUMNA ${esc(w.col)}` : "";
   return `${topbar()}<div class="stage rotate">
-    ${o ? `<div class="go">${esc(o.nick)}, levántate y ve al <b>PC ${o.toPc}</b></div><div class="divider"></div>
+    ${o ? `<div class="go">${esc(o.nick)}, levántate y ve a tu puesto</div><div class="divider"></div>
       <span class="muted" style="font-size:13px;font-weight:600;letter-spacing:.3em">AHORA ERES</span>
       ${rolePill(o.toRole, ARTICLE[o.toRole])}
-      <span class="big" style="font-size:clamp(90px,18vw,220px);text-shadow:0 0 30px rgba(255,255,255,.45)">PC ${o.toPc}</span>
+      <span class="big" style="font-size:clamp(90px,18vw,220px);text-shadow:0 0 30px rgba(255,255,255,.45)">${esc(big)}</span>
+      ${sub ? `<div style="font-size:16px;font-weight:700;letter-spacing:.14em;color:#fff">${sub}</div>` : ""}
       <div class="phrase" style="color:${RC[o.toRole]}">${esc(RN[o.toRole])}: ${esc(PHRASE[o.toRole])}</div>`
     : `<span class="muted" style="font-size:16px">Espera la siguiente ronda…</span>`}
     ${R.me ? (R.me.ready
@@ -324,8 +330,8 @@ function teamOptions(v, d) {
 }
 function devTable(v) {
   if (!v.devices.length) return `<div class="card" style="padding:20px;text-align:center" class="muted">Todavía no se conecta nadie. Abre la dirección del servidor en los iPads.</div>`;
-  return `<div class="card tablewrap"><table class="devs"><thead><tr><th>PC</th><th>PERSONA</th><th>ROL (MESA)</th><th>EQUIPO</th><th></th></tr></thead><tbody>
-    ${v.devices.map((d) => `<tr><td><span class="online${d.online ? "" : " no"}" title="${d.online ? "En línea" : "Desconectado"}"></span><b class="dots" style="font-size:18px">PC ${d.pc}</b></td>
+  return `<div class="card tablewrap"><table class="devs"><thead><tr><th>PUESTO</th><th>PERSONA</th><th>ROL (MESA)</th><th>EQUIPO</th><th></th></tr></thead><tbody>
+    ${v.devices.map((d) => `<tr><td><span class="online${d.online ? "" : " no"}" title="${d.online ? "En línea" : "Desconectado"}"></span><b class="dots" style="font-size:18px">${esc(whereL(d.where))}</b>${d.where && d.where.row != null ? ` <span class="muted" style="font-size:11px">PC ${d.pc}</span>` : ""}</td>
       <td>${esc(d.nick || "—")}</td>
       <td><select aria-label="Rol del PC ${d.pc}" data-change="role" data-id="${esc(d.id)}">${ROLES.map((r) => `<option value="${r}"${d.role === r ? " selected" : ""}>${RN[r]}</option>`).join("")}</select></td>
       <td><select aria-label="Equipo del PC ${d.pc}" data-change="team" data-id="${esc(d.id)}">${teamOptions(v, d)}</select></td>
@@ -335,7 +341,7 @@ function devTable(v) {
 function teamCard(v, tm, t, live) {
   const devs = v.devices.filter((d) => d.team === t);
   const slots = ROLES.map((r) => { const d = devs.find((x) => x.role === r);
-    return `<div class="slot"><span class="dot" style="background:${RC[r]}"></span>${d ? esc(d.nick || "—") : "<span class='muted'>vacío</span>"}<span class="pc">${RN[r]}${d ? " · PC " + d.pc : ""}</span></div>`; }).join("");
+    return `<div class="slot"><span class="dot" style="background:${RC[r]}"></span>${d ? esc(d.nick || "—") : "<span class='muted'>vacío</span>"}<span class="pc">${RN[r]}${d ? " · " + esc(whereL(d.where)) : ""}</span></div>`; }).join("");
   const feed = live ? `${ctxBar(tm.by || {}, tm.limit)}${ctxLegend(tm.by || {})}
     <div class="feed">${tm.msgs.slice(-5).map((m) => `<span><b style="color:${RC[m.role]}">${m.ch}›</b> ${m.file ? "[archivo] " : ""}${esc(m.text)}</span>`).join("") || "<span class='muted'>Sin mensajes todavía</span>"}</div>` : "";
   // estado del Modelo de este equipo frente al Usuario
@@ -346,6 +352,25 @@ function teamCard(v, tm, t, live) {
   return `<div class="card team${talking ? " asking" : ""}"><h3>EQUIPO ${t + 1}${live ? `<span class="muted">${tm.used}/${tm.limit}${tm.bonus ? " (+" + tm.bonus + ")" : ""}</span>` : ""}</h3>
     ${state}${feed}${slots}${tm.warnings.map((w) => `<span class="warn">▲ ${esc(w)}</span>`).join("")}
     ${live ? `<button class="btn dark sm" data-act="openTeam" data-t="${t}">Ver los canales</button>` : ""}</div>`;
+}
+// Disposición física del salón: cuántas columnas y cómo se nombran filas/columnas, + mapa de puestos
+function boardCard(v) {
+  const b = v.cfg.board || { cols: 0, rowStyle: "letters", colStyle: "numbers" };
+  const styleOpts = (sel) => `<option value="letters"${sel === "letters" ? " selected" : ""}>Letras (A, B, C…)</option><option value="numbers"${sel === "numbers" ? " selected" : ""}>Números (1, 2, 3…)</option>`;
+  return `<div class="card"><h3 style="margin:0 0 12px;font:700 13px var(--ui);letter-spacing:.1em;color:var(--y)">DISPOSICIÓN DE LA SALA</h3>
+    <div class="cfg" style="padding:0${b.cols ? ";margin-bottom:16px" : ""}">
+      <label class="field"><span>COLUMNAS DEL SALÓN · 0 = sin tablero ("PC N")</span><input class="input" type="number" min="0" max="26" value="${b.cols}" data-change="boardCols"></label>
+      <label class="field"><span>NOMBRE DE LAS FILAS</span><select class="input" data-change="boardRow">${styleOpts(b.rowStyle)}</select></label>
+      <label class="field"><span>NOMBRE DE LAS COLUMNAS</span><select class="input" data-change="boardCol">${styleOpts(b.colStyle)}</select></label>
+    </div>
+    ${b.cols ? boardPreview(v) : `<p class="muted" style="margin:0;font-size:13px">Sin tablero, la rotación dice "ve al PC N". Pon las columnas de tu salón y al rotar cada quien verá la <b>fila y columna</b> de su puesto físico (ej. <b>B3</b>).</p>`}</div>`;
+}
+function boardPreview(v) {
+  const b = v.cfg.board, seats = v.devices.slice().sort((a, c) => a.pc - c.pc);
+  if (!seats.length) return `<p class="muted" style="margin:0;font-size:13px">Cuando entre gente verás aquí el mapa de puestos con su nombre de fila y columna.</p>`;
+  const cells = seats.map((d) => `<div class="bcell" title="PC ${d.pc}"><b>${esc(whereL(d.where))}</b><span style="color:${RC[d.role]}">${esc(d.nick || "—")}</span></div>`).join("");
+  return `<div class="muted" style="font-size:12px;font-weight:600;letter-spacing:.1em;margin-bottom:8px">MAPA DE PUESTOS (${seats.length}) · fila por ${b.rowStyle === "letters" ? "letra" : "número"}, columna por ${b.colStyle === "letters" ? "letra" : "número"}</div>
+    <div class="tablewrap"><div class="board" style="grid-template-columns:repeat(${b.cols},minmax(56px,1fr))">${cells}</div></div>`;
 }
 function vAdmin(v) {
   const head = (title, right) => `${topbar(`<span class="lbl" style="font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--y)">PANEL ADMIN · ${esc(v.code)}</span>`)}<div class="admhead"><h1 class="h1" style="font-size:34px;color:var(--y)">${title}</h1><div class="row">${right}</div></div>`;
@@ -371,7 +396,8 @@ function vAdmin(v) {
         <label class="field"><span>ENFRIAMIENTO DEL MODELO TRAS HABLAR CONTIGO</span><select class="input" data-change="cfgCool">${secOpts(COOL_OPTS, v.cfg.coolSec)}</select></label>
         <label class="field"><span>LA CONVERSACIÓN SE CIERRA SOLA TRAS… SIN MENSAJES</span><select class="input" data-change="cfgLive">${secOpts(LIVE_OPTS, v.cfg.liveSec)}</select></label>
       </div>
-      <p class="muted" style="margin:0;font-size:13px">El sistema arma los equipos a medida que entran (1 persona por rol). Cambia el rol o el equipo de cualquier PC en la tabla; si el puesto ya está ocupado, se intercambian.</p>
+      ${boardCard(v)}
+      <p class="muted" style="margin:0;font-size:13px">El sistema arma los equipos a medida que entran (1 persona por rol). Cambia el rol o el equipo de cualquier puesto en la tabla; si el puesto ya está ocupado, se intercambian.</p>
       <div class="teams">${v.teams.map((tm, t) => teamCard(v, tm, t, false)).join("") || "<p class='muted'>Aún no hay equipos.</p>"}</div>
       ${devTable(v)}
       <div class="row" style="justify-content:flex-end"><button class="btn dark" data-act="reshuffle">Rearmar al azar</button><button class="btn" style="background:var(--y);box-shadow:0 0 24px rgba(235,226,18,.45)" data-act="start">INICIAR ACTIVIDAD</button></div>
@@ -402,7 +428,7 @@ function vAdmin(v) {
       <span class="ctlt">ENFRIAMIENTO</span><select class="input sm" data-change="cfgCool" aria-label="Enfriamiento del Modelo tras hablar contigo">${secOpts(COOL_OPTS, v.cfg.coolSec)}</select>
       <span class="ctlt">CIERRE SIN MENSAJES</span><select class="input sm" data-change="cfgLive" aria-label="La conversación se cierra sola tras este tiempo sin mensajes">${secOpts(LIVE_OPTS, v.cfg.liveSec)}</select></div></div>`;
   const usuario = rot ? "" : vUsuario(v);
-  const readyL = rot ? `<div class="card" style="padding:14px"><div class="readyl">${v.rotation.map((x) => `<span class="pill" style="background:${x.ready ? "var(--t)" : "var(--pill)"};color:${x.ready ? "#000" : "#c8c8c8"}">${x.ready ? "✓" : x.online ? "…" : "⚠"} ${esc(x.nick)} → PC ${x.toPc}</span>`).join("")}</div></div>` : "";
+  const readyL = rot ? `<div class="card" style="padding:14px"><div class="readyl">${v.rotation.map((x) => `<span class="pill" style="background:${x.ready ? "var(--t)" : "var(--pill)"};color:${x.ready ? "#000" : "#c8c8c8"}">${x.ready ? "✓" : x.online ? "…" : "⚠"} ${esc(x.nick)} → ${esc(whereL(x.where))}</span>`).join("")}</div></div>` : "";
   const bc = rot ? "" : `<form class="card bc" data-submit="prompt"><textarea id="bc" maxlength="600" placeholder="Prompt para los Modelos. Ej: Construyan un puente de pasta que aguante un celular." aria-label="Prompt"></textarea>
     <div class="row"><select class="input" id="bcTarget" style="width:auto" aria-label="Destino"><option value="all">Todos los equipos</option>${v.teams.map((_, t) => `<option value="${t}">Solo equipo ${t + 1}</option>`).join("")}</select><button class="btn" style="background:var(--y)">ENVIAR PROMPT</button></div></form>`;
   return `<div class="adm">${head(rot ? "ROTANDO" : v.paused ? "EN PAUSA" : "EN VIVO", right)}${readyL}${usuario}${controls}${bc}
@@ -633,6 +659,9 @@ document.addEventListener("change", (e) => {
   if (k === "cfgQueue") emit("admin:config", { queueSec: +e.target.value });
   if (k === "cfgCool") emit("admin:config", { coolSec: +e.target.value });
   if (k === "cfgLive") emit("admin:config", { liveSec: +e.target.value });
+  if (k === "boardCols") emit("admin:config", { board: { cols: +e.target.value } });
+  if (k === "boardRow") emit("admin:config", { board: { rowStyle: e.target.value } });
+  if (k === "boardCol") emit("admin:config", { board: { colStyle: e.target.value } });
 });
 document.addEventListener("submit", async (e) => {
   e.preventDefault();

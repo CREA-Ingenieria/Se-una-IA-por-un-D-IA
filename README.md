@@ -101,7 +101,15 @@ El hotspot de Windows tiene límites:
 4. **Iniciar actividad** y **enviar el prompt** a todos los Modelos o a un solo equipo.
 5. **Chat**: cada rol ve solo sus canales; el filtro se aplica en el servidor. Arriba a la derecha está el contador "usados / total" de la memoria del equipo, con la **barra partida por colores** según quién la gastó (Usuario en amarillo, Modelo en rosado, Revisor en azul). Al llenarse se borra lo más viejo con un aviso.
 6. **Minijuego**: al lado del chat hay preguntas cortas, **máximo 3 por persona en cada turno** (se renuevan con cada rotación). Cada acierto da **+10 caracteres al propio equipo**. Además del banco fijo, el servidor genera preguntas con números y palabras al azar (cuentas de contexto, la cola, quién habla con quién…), así casi nunca se repiten.
-7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), el celular de cada persona le muestra en blanco "levántate y ve al **PC X**", su **nuevo rol** y la frase de ese rol. El sistema escoge un puesto con un rol que esa persona no ha hecho. Al llegar al puesto toca **¡YA LLEGUÉ!** y, cuando todos están listos, la actividad sigue y el celular carga el chat de ese puesto. El rol y el equipo viajan con la persona (en su celular); el **puesto es físico y numerado**. El emparejamiento Revisor–Arnés es una regla que se le dice a los participantes, no la impone el sistema.
+7. **Rotación**: cuando se acaba el tiempo (o el admin presiona "Rotar ya"), el celular de cada persona le muestra en blanco "levántate y ve a tu puesto", su **nuevo rol**, la frase de ese rol y **la ubicación física del puesto** (fila + columna, p. ej. **B3**, o "PC N" si no se configuró un tablero). El sistema escoge un puesto con un rol que esa persona no ha hecho. Al llegar toca **¡YA LLEGUÉ!** y, cuando todos están listos, la actividad sigue y el celular carga el chat de ese puesto. El rol y el equipo viajan con la persona (en su celular); el **puesto es físico**. El emparejamiento Revisor–Arnés es una regla que se le dice a los participantes, no la impone el sistema.
+
+### Disposición de la sala (tablero)
+
+En el lobby del admin, en **Disposición de la sala**, se define cómo está armado el salón para que la rotación diga la **fila y columna** del puesto en vez de un "PC N" plano:
+
+- **Columnas del salón**: cuántos puestos hay por fila (0 = sin tablero, se usa "PC N").
+- **Nombre de las filas** y **Nombre de las columnas**: letras (A, B, C…) o números (1, 2, 3…), independientes. Así el puesto se llama p. ej. `B3` (fila B, columna 3), `3C` o `2-4` (si ambos son números se usa un guion para que no se confunda con "24").
+- Debajo aparece el **mapa de puestos** en vivo: cada celda muestra su nombre (fila·columna) y quién está sentado ahí, para imprimir los letreros y organizar el salón. Los puestos se numeran por orden de llegada (row-major: se llenan de izquierda a derecha, fila por fila).
 8. **Terminar** muestra un resumen por equipo. **Nueva sesión** borra todo.
 
 ### Canales y reglas de cada rol

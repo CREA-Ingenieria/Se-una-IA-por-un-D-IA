@@ -83,6 +83,22 @@ const phaseOf = (s) => s.last && s.last.phase;
   await wait(100);
   check(admin.last.round === roundBefore, "F7: la ronda no avanzó (no hubo rotación vacía)");
 
+  // F8: tablero físico (fila+columna). Puestos por orden de llegada, mapeo row-major.
+  await call(admin, "admin:reset", {}); await wait(100);
+  const bd = [];
+  for (let i = 0; i < 5; i++) { const s = mk(); await up(s); await call(s, "hello", { browserId: "bd-" + i }); await call(s, "join", { nick: "q" + i, role: roles[i % 3] }); bd.push(s); }
+  await wait(150);
+  const labels = () => admin.last.devices.slice().sort((a, c) => a.pc - c.pc).map((d) => d.where.label).join(" ");
+  check(labels() === "PC 1 PC 2 PC 3 PC 4 PC 5", "F8: sin tablero los puestos son PC 1..5");
+  await call(admin, "admin:config", { board: { cols: 4, rowStyle: "letters", colStyle: "numbers" } });
+  await wait(150);
+  check(labels() === "A1 A2 A3 A4 B1", "F8: con 4 columnas (fila letras, col números) → A1 A2 A3 A4 B1 (row-major)");
+  check(bd[0].last.you.where.label === "A1" && bd[0].last.you.where.row === "A" && bd[0].last.you.where.col === "1", "F8: cada jugador ve su fila y columna");
+  await call(admin, "admin:config", { board: { cols: 3, rowStyle: "numbers", colStyle: "numbers" } });
+  await wait(150);
+  check(labels() === "1-1 1-2 1-3 2-1 2-2", "F8: ambos números usan separador (1-1…) para no ser ambiguo");
+  bd.forEach((s) => s.close());
+
   ps.forEach((s) => { try { s.close(); } catch (_) {} }); admin.close();
   server.close();
   console.log(fails ? `\n${fails} prueba(s) de regresión fallaron` : "\nRegresión OK.");

@@ -75,7 +75,9 @@ function freshState() {
     phase: "lobby", // lobby | activity | rotate | end
     // queueSec: espera mínima en la cola para hablar con el Usuario · coolSec: espera tras cada conversación
     // liveSec: la conversación se cierra sola si pasa este tiempo sin mensajes
-    cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true, queueSec: 60, coolSec: 60, liveSec: 60 },
+    // board: disposición física de la sala. cols=0 → se usa "PC N" (sin tablero). Con cols≥1, cada puesto
+    // se nombra por fila+columna (A1, B3…), con filas/columnas en letras o números según defina el admin.
+    cfg: { limit: 500, mode: "mensaje", rotSec: 300, autoRot: true, queueSec: 60, coolSec: 60, liveSec: 60, board: { cols: 0, rowStyle: "letters", colStyle: "numbers" } },
     files: {}, // fileId -> { type, name, size, team, at } (el contenido está en data/archivos/<fileId>)
     devices: {}, // seatId -> { id, pc, role, team, personId } · un ASIENTO físico numerado (pc), independiente del teléfono
     persons: {}, // personId -> { id, nick, history: [], deviceId(asiento actual), browserId(su teléfono), online }
@@ -115,6 +117,23 @@ function usedBy(t) {
   return by;
 }
 const hasRevisor = (t) => !!deviceAt(t, "revisor");
+// ---- Tablero físico: convierte el número de puesto (pc) en una ubicación fila+columna ----
+// 0->A,1->B…25->Z,26->AA (estilo hoja de cálculo) para letras; idx+1 para números.
+function axisLabel(style, idx) {
+  if (style === "numbers") return String(idx + 1);
+  let n = idx, s = "";
+  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
+  return s;
+}
+// { label, row, col, pc }. Sin tablero (cols=0) devuelve "PC N" para no romper el modo actual.
+function seatWhere(pc) {
+  const b = S.cfg.board || {};
+  if (!b.cols || b.cols < 1) return { label: "PC " + pc, row: null, col: null, pc };
+  const i = pc - 1, r = Math.floor(i / b.cols), c = i % b.cols;
+  const row = axisLabel(b.rowStyle, r), col = axisLabel(b.colStyle, c);
+  const sep = b.rowStyle === b.colStyle ? "-" : ""; // evita ambigüedad cuando ambos son números ("2-3" en vez de "23")
+  return { label: row + sep + col, row, col, pc };
+}
 const cleanText = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
 
 // ---------- Equipos ----------
@@ -360,7 +379,7 @@ function deviceView(dev) {
   const person = S.persons[dev.personId];
   const v = {
     ...base, registered: true,
-    you: { pc: dev.pc, role: dev.role, team: dev.team, nick: person ? person.nick : null },
+    you: { pc: dev.pc, role: dev.role, team: dev.team, nick: person ? person.nick : null, where: seatWhere(dev.pc) },
     counts: { devices: devList().length, online: onlineCount() },
   };
   if (S.phase === "rotate") {
@@ -368,7 +387,7 @@ function deviceView(dev) {
     const myPid = dev.personId;
     const target = myPid != null && S.rot.assign[myPid] ? S.devices[S.rot.assign[myPid]] : null;
     v.rotation = {
-      outgoing: target ? { nick: person ? person.nick : "", toPc: target.pc, toRole: target.role } : null,
+      outgoing: target ? { nick: person ? person.nick : "", toPc: target.pc, toRole: target.role, where: seatWhere(target.pc) } : null,
       me: myPid != null && S.rot.assign[myPid] ? { ready: !!S.rot.ready[myPid] } : null,
       ready: Object.keys(S.rot.ready).length, total: Object.keys(S.rot.assign).length,
     };
@@ -395,7 +414,7 @@ function adminView() {
     live: S.live ? { ...S.live, endsAt: liveEndsAt() } : null,
     queue: S.queue.map((q) => ({ team: q.team, text: q.text, file: !!q.file, nick: q.author.nick, readyAt: q.at + S.cfg.queueSec * 1000 })),
     devices: devList().sort((a, b) => a.pc - b.pc).map((d) => ({
-      id: d.id, pc: d.pc, role: d.role, team: d.team, online: seatOnline(d),
+      id: d.id, pc: d.pc, role: d.role, team: d.team, online: seatOnline(d), where: seatWhere(d.pc),
       nick: d.personId && S.persons[d.personId] ? S.persons[d.personId].nick : null,
     })),
     teams: S.teams.map((tm, t) => ({
@@ -404,7 +423,7 @@ function adminView() {
     })),
     rotation: S.rot ? Object.entries(S.rot.assign).map(([pid, did]) => ({
       nick: S.persons[pid] ? S.persons[pid].nick : "?", toPc: S.devices[did] ? S.devices[did].pc : null, ready: !!S.rot.ready[pid],
-      online: !!(S.persons[pid] && S.persons[pid].online),
+      online: !!(S.persons[pid] && S.persons[pid].online), where: S.devices[did] ? seatWhere(S.devices[did].pc) : null,
     })) : null,
   };
 }
@@ -752,7 +771,13 @@ io.on("connection", (sock) => {
   });
 
   // se puede cambiar en cualquier momento, también en plena actividad
-  adminOn("admin:config", ({ limit, mode, rotSec, autoRot, queueSec, coolSec, liveSec }) => {
+  adminOn("admin:config", ({ limit, mode, rotSec, autoRot, queueSec, coolSec, liveSec, board }) => {
+    if (board && typeof board === "object") {
+      const bd = S.cfg.board;
+      if (board.cols !== undefined) bd.cols = Math.max(0, Math.min(26, Math.round(Number(board.cols)) || 0));
+      if (board.rowStyle === "letters" || board.rowStyle === "numbers") bd.rowStyle = board.rowStyle;
+      if (board.colStyle === "letters" || board.colStyle === "numbers") bd.colStyle = board.colStyle;
+    }
     if (queueSec !== undefined) S.cfg.queueSec = Math.max(0, Math.min(900, Math.round(Number(queueSec)) || 0));
     if (liveSec !== undefined) S.cfg.liveSec = Math.max(1, Math.min(1800, Math.round(Number(liveSec)) || 60));
     if (coolSec !== undefined) S.cfg.coolSec = Math.max(0, Math.min(1800, Math.round(Number(coolSec)) || 0));
